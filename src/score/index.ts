@@ -1,15 +1,17 @@
 /**
- * gui-score — reference implementation of the dotgui CCACT quality model.
+ * gui-score — reference implementation of the dotgui CCAC quality model.
  *
- * Authority is core/spec/QUALITY.md, not this code. This implements the three
- * LOCAL levels (Clean, Consistent, Accessible). Conventional and Trend require
- * the gui.farm corpus and are reported as NA — absent with a reason, never
- * zeroed and never faked.
+ * Authority is core/spec/QUALITY.md, not this code. All four levels are local,
+ * deterministic and zero-AI — there is no external service and no corpus. The
+ * score measures the FILE, not the design. Clean, Consistent and Accessible run
+ * on the parsed tree; Comprehensible scores how AI-ready the file is as semantics
+ * via reach-coverage — each DECLARED role= documents its subtree as far as its
+ * catalog `reach` allows, and the score is the fraction of nodes so documented
+ * (face value, no inference; resemblance matching is the optimizer's job).
  *
  *   score(xml)            score a bare .guix string
  *   scorePackage(bytes)   score a .gui package (zip): full asset-intact checking
  */
-import './util/dom' // installs a global DOMParser (headless) before the parser runs
 import { strFromU8 } from 'fflate'
 import { unpack, isZip } from '../package'
 import { parseXml } from './deps'
@@ -17,17 +19,16 @@ import { runGate } from './gate'
 import { scoreClean } from './levels/clean'
 import { scoreConsistent } from './levels/consistent'
 import { scoreAccessible } from './levels/accessible'
+import { scoreComprehensible } from './levels/comprehensible'
 import type { ScoreOutput, Optimize } from './types'
-
-const NA = (reason: string) => ({ status: 'na' as const, reason })
 
 export interface ScoreContext {
   /** Packaged asset paths (e.g. "assets/hero.webp"); enables asset-intact checks. */
   assetPaths?: Set<string>
   /**
-   * The optimizer, injected. Clean uses its diff as a cleanliness signal. The kit
-   * does not depend on gui-optimizer; if omitted, Clean is reported NA (absent
-   * with a reason), per the CCACT doctrine — never zeroed, never faked.
+   * @deprecated No longer used. Clean is now a standalone analysis over the
+   * parsed tree (it does not run the optimizer). Accepted and ignored for
+   * back-compat with callers that still inject it.
    */
   optimize?: Optimize
 }
@@ -49,13 +50,10 @@ export function score(xml: string, ctx: ScoreContext = {}): ScoreOutput {
   if (gate) return gate
 
   return {
-    clean: ctx.optimize
-      ? scoreClean(xml, parsed.root, ctx.optimize)
-      : NA('Clean requires the optimizer (inject via ScoreContext.optimize); not supplied'),
+    clean: scoreClean(parsed.root),
     consistent: scoreConsistent(parsed),
     accessible: scoreAccessible(parsed.root, parsed.platform),
-    conventional: NA('requires the gui.farm corpus (remote)'),
-    trend: NA('requires the gui.farm corpus with temporal metadata (remote)'),
+    comprehensible: scoreComprehensible(parsed.root),
   }
 }
 

@@ -2,7 +2,8 @@
  * The dotgui linter — the kit's canonical idiom + content checker. Beyond schema
  * legality (that's `validate`), this flags non-idiomatic markup (empty spacers,
  * invented attributes, bad color formats, undefined tokens) and content "AI
- * tells". Parses markup into a DOM (happy-dom) and runs the checks in order.
+ * tells". Parses markup into a node tree (DOM-free via the shared parser) and
+ * runs the checks in order.
  *
  * This is the single source of truth: the CLI, gui-app, and the skill linter all
  * consume it instead of keeping their own ports (build_gui.py / gui-app validator

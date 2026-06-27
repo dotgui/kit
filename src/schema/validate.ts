@@ -132,9 +132,27 @@ function parse(xml: string): El {
 // ---------------------------------------------------------------------------
 
 const LAYOUT_TAGS = new Set(['frame', 'stack', 'row', 'col', 'grid', 'group'])
-const CONTENT_TAGS = new Set(['text', 'img', 'svg', 'shape'])
+
+/**
+ * Grid-placement geometry (RFC-032). A grid child placed by a gc/gr *range* or a
+ * col-span/row-span derives that axis's size from the span — the renderer fills
+ * it (see render applyGridPlacement). Such children don't need explicit w/h on
+ * the spanned axis. w covers the column axis (gc range / col-span); h the row
+ * axis (gr range / row-span). A bare gc/gr cell index does NOT size the child.
+ */
+function gridFillsWidth(el: El, parentTag: string): boolean {
+  if (parentTag !== 'grid') return false
+  const gc = el.attrs.gc
+  return (gc !== undefined && gc.includes('/')) || el.attrs['col-span'] !== undefined
+}
+function gridFillsHeight(el: El, parentTag: string): boolean {
+  if (parentTag !== 'grid') return false
+  const gr = el.attrs.gr
+  return (gr !== undefined && gr.includes('/')) || el.attrs['row-span'] !== undefined
+}
+const CONTENT_TAGS = new Set(['text', 'img', 'svg', 'shape', 'instance'])
 const CHILD_TAGS = new Set([...LAYOUT_TAGS, ...CONTENT_TAGS])
-const ROOT_SECTION_TAGS = new Set(['preview', 'tokens', 'styles', 'fonts', 'assets', 'meta'])
+const ROOT_SECTION_TAGS = new Set(['preview', 'tokens', 'styles', 'fonts', 'assets', 'meta', 'components'])
 const ALL_KNOWN_TAGS = new Set([
   ...CHILD_TAGS,
   ...ROOT_SECTION_TAGS,
@@ -151,6 +169,8 @@ const ALL_KNOWN_TAGS = new Set([
   'segment',
   // shape path data child
   'path',
+  // component / instance system (RFC-0008, RFC-0034)
+  'component', 'component-set', 'variant', 'props', 'prop',
 ])
 
 const LAYOUT_DIRECTIONS = new Set(['horizontal', 'vertical', 'grid'])
@@ -191,6 +211,8 @@ function isGradient(value: string): boolean {
 }
 
 function isValidFill(value: string): boolean {
+  // 'none'/'transparent' are honored no-paint sentinels (see render color parser).
+  if (value === 'none' || value === 'transparent') return true
   return isColorValue(value) || isGradient(value) || isTokenRef(value)
 }
 
@@ -262,6 +284,30 @@ export function validate(guiXml: string): ValidationResult {
   const fillStyleNames = new Set<string>()
   const effectStyleNames = new Set<string>()
 
+  // Parse declared mode axes (RFC-0037): <mode name="theme" values="light dark" />,
+  // optionally wrapped in <modes>. Moded tokens carry per-mode values as
+  // {axis}-{value} attributes (e.g. theme-light) instead of a constant `value`.
+  const modeAxes: Record<string, Set<string>> = {}
+  const addAxis = function(el: El) {
+    const list = (el.attrs.values || '').trim().split(/\s+/).filter(Boolean)
+    if (el.attrs.name && list.length) modeAxes[el.attrs.name] = new Set(list)
+  }
+  for (const c of root.children) {
+    if (c.tag === 'mode') addAxis(c)
+    else if (c.tag === 'modes') for (const m of c.children) { if (m.tag === 'mode') addAxis(m) }
+  }
+  // Per-mode values declared on a token via {declared-axis}-{declared-value} attrs.
+  const modedValues = function(t: El): string[] {
+    const out: string[] = []
+    for (const attr of Object.keys(t.attrs)) {
+      for (const axis of Object.keys(modeAxes)) {
+        const prefix = axis + '-'
+        if (attr.indexOf(prefix) === 0 && modeAxes[axis].has(attr.slice(prefix.length))) out.push(t.attrs[attr])
+      }
+    }
+    return out
+  }
+
   // Parse tokens section
   const tokensEl = root.children.find(function(c) { return c.tag === 'tokens' })
   if (tokensEl) {
@@ -274,12 +320,18 @@ export function validate(guiXml: string): ValidationResult {
         err('TOKEN_NO_NAME', `Token missing required attribute: name`, `gui > tokens > ${t.tag}`)
         continue
       }
-      if (!t.attrs.value) {
-        err('TOKEN_NO_VALUE', `Token "${t.attrs.name}" missing required attribute: value`, `gui > tokens > ${t.tag}`)
+      const moded = modedValues(t)
+      if (t.attrs.value === undefined && moded.length === 0) {
+        err('TOKEN_NO_VALUE', `Token "${t.attrs.name}" missing a value: provide value="..." or per-mode {axis}-{value} attributes (e.g. theme-light)`, `gui > tokens > ${t.tag}`)
         continue
       }
-      if (t.tag === 'color' && !isColorValue(t.attrs.value)) {
-        err('TOKEN_INVALID_COLOR', `Color token "${t.attrs.name}" has invalid color value: ${t.attrs.value}. Expected hex, rgba(), or oklch().`, `gui > tokens > color`)
+      if (t.tag === 'color') {
+        const vals = t.attrs.value !== undefined ? [t.attrs.value, ...moded] : moded
+        for (const v of vals) {
+          if (!isColorValue(v)) {
+            err('TOKEN_INVALID_COLOR', `Color token "${t.attrs.name}" has invalid color value: ${v}. Expected hex, rgba(), or oklch().`, `gui > tokens > color`)
+          }
+        }
       }
       tokenNames.add(t.attrs.name)
     }
@@ -413,8 +465,10 @@ export function validate(guiXml: string): ValidationResult {
 
     switch (el.tag) {
       case 'frame': {
-        if (!el.attrs.w) err('MISSING_ATTR', `<frame> missing required attribute: w`, path)
-        if (!el.attrs.h) err('MISSING_ATTR', `<frame> missing required attribute: h`, path)
+        // A frame placed by a grid span (gc/gr range or col/row-span) derives that
+        // axis's size from the span — same grid-placement rule as img/svg.
+        if (!el.attrs.w && !gridFillsWidth(el, parentTag)) err('MISSING_ATTR', `<frame> missing required attribute: w`, path)
+        if (!el.attrs.h && !gridFillsHeight(el, parentTag)) err('MISSING_ATTR', `<frame> missing required attribute: h`, path)
         validateChildren(el, path)
         break
       }
@@ -449,6 +503,16 @@ export function validate(guiXml: string): ValidationResult {
         break
       }
 
+      case 'instance': {
+        // RFC-0008: an instance references a declared component. Referential
+        // resolution (id → <component>) is the gate's Intact check; schema only
+        // requires the attribute to be present.
+        if (!el.attrs.component) {
+          err('MISSING_ATTR', `<instance> missing required attribute: component`, path)
+        }
+        break
+      }
+
       case 'text': {
         const hasValue = el.attrs.value !== undefined
         const hasSegments = el.children.some(function(c) { return c.tag === 'segment' })
@@ -475,8 +539,8 @@ export function validate(guiXml: string): ValidationResult {
           else if (!el.attrs.src.startsWith('https://') && !el.attrs.src.startsWith('http://'))
             warn('IMG_INLINE_SRC', `<img src> is not an asset reference or URL — expected "$asset-id" or "https://..."`, path)
         }
-        if (!el.attrs.w) err('MISSING_ATTR', `<img> missing required attribute: w`, path)
-        if (!el.attrs.h) err('MISSING_ATTR', `<img> missing required attribute: h`, path)
+        if (!el.attrs.w && !gridFillsWidth(el, parentTag)) err('MISSING_ATTR', `<img> missing required attribute: w`, path)
+        if (!el.attrs.h && !gridFillsHeight(el, parentTag)) err('MISSING_ATTR', `<img> missing required attribute: h`, path)
         if (el.attrs.fit && !FIT_MODES.has(el.attrs.fit)) {
           err('INVALID_FIT', `<img> fit must be cover|contain|fill|none, got "${el.attrs.fit}"`, path)
         }
@@ -492,8 +556,8 @@ export function validate(guiXml: string): ValidationResult {
           if (isTokenRef(el.attrs.src)) resolveRef(el.attrs.src, path, 'asset')
         }
         // inline SVG children are raw SVG markup — skip .gui child validation for them
-        if (!el.attrs.w) err('MISSING_ATTR', `<svg> missing required attribute: w`, path)
-        if (!el.attrs.h) err('MISSING_ATTR', `<svg> missing required attribute: h`, path)
+        if (!el.attrs.w && !gridFillsWidth(el, parentTag)) err('MISSING_ATTR', `<svg> missing required attribute: w`, path)
+        if (!el.attrs.h && !gridFillsHeight(el, parentTag)) err('MISSING_ATTR', `<svg> missing required attribute: h`, path)
         break
       }
 
@@ -584,6 +648,54 @@ export function validate(guiXml: string): ValidationResult {
       if (!f.attrs.source) err('MISSING_ATTR', `<font> missing required attribute: source`, path)
       if (f.attrs.source && !FONT_SOURCES.has(f.attrs.source)) {
         err('INVALID_FONT_SOURCE', `<font> source must be google|system|unresolved, got "${f.attrs.source}"`, path)
+      }
+    })
+  }
+
+  // Validate components section (RFC-0008 component/instance, RFC-0034 props).
+  // Mirrors the parser's grammar: <component id> with an optional <props> and a
+  // body layout node; <component-set id> of <variant id> entries.
+  function validateProps(propsEl: El, basePath: string) {
+    propsEl.children.forEach(function(p, i) {
+      const pPath = `${basePath} > prop[${i}]`
+      if (p.tag !== 'prop') {
+        warn('UNKNOWN_TAG', `Unknown element inside <props>: <${p.tag}>`, pPath)
+        return
+      }
+      if (!p.attrs.name) err('MISSING_ATTR', `<prop> missing required attribute: name`, pPath)
+      if (!p.attrs.type) err('MISSING_ATTR', `<prop> missing required attribute: type`, pPath)
+      if (!p.attrs.target) err('MISSING_ATTR', `<prop> missing required attribute: target`, pPath)
+    })
+  }
+  function validateComponentBody(parent: El, path: string) {
+    const propsEl = parent.children.find(function(c) { return c.tag === 'props' })
+    if (propsEl) validateProps(propsEl, `${path} > props`)
+    const bodyEl = parent.children.find(function(c) { return c.tag !== 'props' })
+    if (bodyEl) {
+      if (CHILD_TAGS.has(bodyEl.tag)) validateNode(bodyEl, `${path} > ${bodyEl.tag}`, parent.tag)
+      else warn('UNEXPECTED_CHILD', `Component body must be a layout node, got <${bodyEl.tag}>`, `${path} > ${bodyEl.tag}`)
+    }
+  }
+  const componentsEl = root.children.find(function(c) { return c.tag === 'components' })
+  if (componentsEl) {
+    componentsEl.children.forEach(function(comp, i) {
+      const cPath = `gui > components > ${comp.tag}[${i}]`
+      if (comp.tag === 'component') {
+        if (!comp.attrs.id) err('MISSING_ATTR', `<component> missing required attribute: id`, cPath)
+        validateComponentBody(comp, cPath)
+      } else if (comp.tag === 'component-set') {
+        if (!comp.attrs.id) err('MISSING_ATTR', `<component-set> missing required attribute: id`, cPath)
+        comp.children.forEach(function(v, vi) {
+          const vPath = `${cPath} > variant[${vi}]`
+          if (v.tag !== 'variant') {
+            warn('UNKNOWN_TAG', `Unknown element inside <component-set>: <${v.tag}>`, vPath)
+            return
+          }
+          if (!v.attrs.id) err('MISSING_ATTR', `<variant> missing required attribute: id`, vPath)
+          validateComponentBody(v, vPath)
+        })
+      } else {
+        warn('UNKNOWN_TAG', `Unknown element inside <components>: <${comp.tag}>`, cPath)
       }
     })
   }

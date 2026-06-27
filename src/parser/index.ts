@@ -892,12 +892,19 @@ export function parseXml(xml: string, assetMap?: Record<string, string>): Parsed
   let doc: Document
   try {
     const sanitized = normalizeBooleanAttrs(xml).replace(/&(?!amp;|lt;|gt;|quot;|apos;|#)/g, '&amp;')
-    // @xmldom/xmldom is a pure-JS DOMParser, so parsing works in any environment
-    // (node, browser, edge, the Figma sandbox) with no global DOM. It throws on
-    // malformed XML (caught below) instead of injecting a <parsererror> node.
-    doc = new DOMParser({
-      onError: (level: string, msg: string) => { if (level === 'fatalError') throw new Error(msg) },
-    }).parseFromString(sanitized, 'text/xml') as unknown as Document
+    // Prefer the platform's native DOMParser (browser / Figma UI) — fast and
+    // exact. Fall back to @xmldom/xmldom (pure JS) wherever there's no DOM (node,
+    // edge, the Figma sandbox), so the parser runs everywhere.
+    const Native = (globalThis as { DOMParser?: typeof DOMParser }).DOMParser
+    if (Native) {
+      doc = new Native().parseFromString(sanitized, 'text/xml')
+      if (doc.querySelector?.('parsererror')) return null
+    } else {
+      // xmldom throws on malformed XML (caught below) instead of a <parsererror>.
+      doc = new XmlDOMParser({
+        onError: (level: string, msg: string) => { if (level === 'fatalError') throw new Error(msg) },
+      }).parseFromString(sanitized, 'text/xml') as unknown as Document
+    }
   } catch {
     return null
   }

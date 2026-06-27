@@ -18,9 +18,9 @@ flattenTokens(tokenDefs, modes, activeMode): Record<string, string>
 Types: `ParsedGUI`, `ParsedNode`, `ParsedFill`, `ParsedAppearance`, `ParsedEffect`,
 `ParsedBorder`, `ParsedComponent`, `ParsedProp`, `TokenDef`, `ModeAxis`, `FontInfo`.
 
-> **Headless note:** `parseXml` needs a global `DOMParser`. Browsers and Figma
-> have one; in node/bun install `happy-dom` first (the `score` module does this
-> for you).
+> **Runs anywhere:** `parseXml` is DOM-free. It uses the platform's native
+> `DOMParser` when present (browser, Figma UI) and falls back to `@xmldom/xmldom`
+> (pure JS) everywhere else — node, edge, the Figma sandbox. No DOM shim needed.
 
 ## Examples
 

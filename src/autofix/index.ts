@@ -144,9 +144,9 @@ export interface AutofixResult {
 
 /** Parse → autofix → serialize. Returns the (possibly) rewritten markup. */
 export function autofixMarkup(xml: string): AutofixResult {
-  const { root, win, error } = parseGui(xml)
+  const { root, error } = parseGui(xml)
   if (error || !root) return { xml, fixes: [], error: error ?? 'parse failed' }
   const fixes = autofixFragment(root)
   if (fixes.length === 0) return { xml, fixes: [] }
-  return { xml: serialize(win, root), fixes }
+  return { xml: serialize(root), fixes }
 }

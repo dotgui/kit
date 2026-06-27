@@ -7,6 +7,6 @@
  *   @dotgui/kit/parser      parse .guix → resolved model
  *   @dotgui/kit/validate    validate markup against the schema
  *   @dotgui/kit/render      render the resolved model → HTML (browser-clean)
- *   @dotgui/kit/score       CCACT quality scorer (optimizer injected)
+ *   @dotgui/kit/score       CCAC quality scorer (local, zero-AI)
  */
 export * from './schema/types'

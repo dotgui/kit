@@ -68,8 +68,10 @@ gates you must pass through.
 
 **Score is not a mandatory step in packing.** Packing a valid file never requires
 a score. Score is a separate, read-only quality lens you can run on any valid file
-— it returns a CCACT report (Clean · Consistent · Accessible; Conventional and
-Trend are NA until the corpus exists) and **the kit itself takes no action on it.**
+— it returns a CCAC report (Clean · Consistent · Accessible · Comprehensible; all
+local and zero-AI; Comprehensible scores how AI-ready the file is as semantics by
+reach-coverage over its declared `role=` anchors) and **the kit itself takes no
+action on it.**
 A low score is still a valid, packable file. Think HTML *best-practice standards*
 — advisory, not a parser error.
 
@@ -108,7 +110,7 @@ linked below.
 | `@dotgui/kit/validate` | `validate(markup)` → schema errors, or clean | [validate](src/schema/README.md) |
 | `@dotgui/kit/parser` | `parseXml(markup)` → resolved model (tokens/styles/modes resolved) | [parser](src/parser/README.md) |
 | `@dotgui/kit/render` | `render(...)`, `renderToHTML(...)` → HTML (browser-clean) | [render](src/render/README.md) |
-| `@dotgui/kit/score` | `score(...)`, `scorePackage(...)` → CCACT report | [score](src/score/README.md) |
+| `@dotgui/kit/score` | `score(...)`, `scorePackage(...)` → CCAC report | [score](src/score/README.md) |
 | `@dotgui/kit/package` | `unpack`/`pack` + read/edit a `.gui` in memory | [package](src/package/README.md) |
 | `@dotgui/kit/lint` | `lintMarkup(...)` → idiom + content findings | [lint](src/lint/README.md) |
 | `@dotgui/kit/autofix` | `autofixMarkup(...)` → deterministic repair | [autofix](src/autofix/README.md) |

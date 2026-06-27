@@ -1,30 +1,16 @@
 #!/usr/bin/env bun
 /**
- * gui-score CLI — score a .gui or .guix file and print the CCACT report.
+ * gui-score CLI — score a .gui or .guix file and print the CCAC report.
  *
  *   bun run src/cli.ts <file> [--json]
  *
  * This is a thin wrapper. The JS library (index.ts) is the real surface; the
- * CLI, the future Figma plugin, gui-app, and gui.farm are all thin consumers of
- * it, per RFC-0040.
+ * CLI, the future Figma plugin, and gui-app are all thin consumers of it, per
+ * RFC-0040. Scoring is fully local — no service, no corpus.
  */
 import { readFileSync } from 'fs'
 import { scorePackage } from './index'
-import { isGateFailure, type ScoreReport, type Optimize } from './types'
-
-/**
- * The optimizer is a standalone, optional package. The CLI injects it when
- * present so Clean is scored fully; if it isn't installed, Clean reports NA.
- */
-async function loadOptimize(): Promise<Optimize | undefined> {
-  try {
-    // @ts-expect-error optional peer — resolved at runtime only if installed
-    const m: any = await import('gui-optimizer')
-    return m.optimize as Optimize
-  } catch {
-    return undefined
-  }
-}
+import { isGateFailure, type ScoreReport } from './types'
 
 function bar(score: number): string {
   const filled = Math.round(score / 5)
@@ -36,8 +22,13 @@ function printLevel(name: string, level: ScoreReport[keyof ScoreReport]): void {
     console.log(`  ${name.padEnd(13)} ${level.status.toUpperCase()}  (${level.reason})`)
     return
   }
-  console.log(`  ${name.padEnd(13)} ${String(level.score).padStart(3)}  ${bar(level.score)}`)
+  console.log(`  ${name.padEnd(14)} ${String(level.score).padStart(3)}  ${bar(level.score)}`)
   for (const a of level.audits) {
+    // Inventory audits (Comprehensible) carry { role, path } — facts, not findings.
+    if (typeof a.role === 'string') {
+      console.log(`      role  ${a.role.padEnd(20)} ${a.path ?? ''}`)
+      continue
+    }
     const sev = (a.severity ?? 'info').toUpperCase().padEnd(5)
     console.log(`      ${sev} ${a.why ?? JSON.stringify(a)}`)
   }
@@ -53,8 +44,7 @@ async function main(): Promise<void> {
   }
 
   const bytes = new Uint8Array(readFileSync(file))
-  const optimize = await loadOptimize()
-  const out = scorePackage(bytes, { optimize })
+  const out = scorePackage(bytes)
 
   if (json) {
     console.log(JSON.stringify(out, null, 2))
@@ -70,12 +60,11 @@ async function main(): Promise<void> {
     process.exit(1)
   }
 
-  console.log(`\n  CCACT report for ${file}\n`)
+  console.log(`\n  CCAC report for ${file}\n`)
   printLevel('Clean', out.clean)
   printLevel('Consistent', out.consistent)
   printLevel('Accessible', out.accessible)
-  printLevel('Conventional', out.conventional)
-  printLevel('Trend', out.trend)
+  printLevel('Comprehensible', out.comprehensible)
   console.log('')
   process.exit(0)
 }

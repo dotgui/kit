@@ -340,7 +340,11 @@ gui-grid { display: grid; position: relative; }
 [clip="true"] { overflow: hidden; }
 
 /* ── Text ────────────────────────────────────────────────────────────────── */
-gui-text { display: block; white-space: pre-wrap; line-height: normal; font-size: initial; font-family: initial; }
+/* Default to grayscale antialiasing to match Figma's text rendering. Browsers
+   (esp. macOS) default to subpixel-antialiased, which renders text heavier and
+   slightly wider — enough to shift line wrapping. An explicit font-smoothing
+   attribute still overrides this via inline style. */
+gui-text { display: block; white-space: pre-wrap; line-height: normal; font-size: initial; font-family: initial; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
 gui-text[data-h-mode="hug"] { height: auto; min-height: max-content; }
 
 /* ── Image ───────────────────────────────────────────────────────────────── */
@@ -1609,7 +1613,18 @@ function renderFrame(el: Element, assets: Record<string, string>, ctx: Ctx, isSt
   const flowChildTotal = children.filter(child =>
     child.tagName !== 'appearance' && !(isStack && isAbsoluteChild(child))
   ).length
+  // Mixed stack: a stack that holds both absolute and in-flow children. CSS paints
+  // positioned (absolute) elements above static (in-flow) ones regardless of
+  // document order, so an absolute child listed *before* a flow sibling (i.e. meant
+  // to sit behind it, e.g. a full-bleed background rect) would wrongly cover it.
+  // We fix this by giving every child a document-order z-index — but only when no
+  // other branch below already owns stacking for this frame.
+  const mixedStack = isStack &&
+    flowChildTotal > 0 &&
+    flowChildTotal < children.filter(c => c.tagName !== 'appearance').length
+  const orderedStack = mixedStack && negativeGap === null && !reverseZ && !explicitAppearance
   let flowChildCount = 0
+  let renderIndex = 0
   let prevFlowChild: Element | null = null
   for (const child of children) {
     if (child.tagName === 'appearance') continue
@@ -1648,7 +1663,16 @@ function renderFrame(el: Element, assets: Record<string, string>, ctx: Ctx, isSt
         if (!childEl.classList.contains('gui-absolute')) addClass(childEl, 'gui-relative')
         if (!reverseZ || isAbsolute) childEl.style.zIndex = '1'
       }
+      if (orderedStack) {
+        // Promote in-flow children to positioned so they share the absolute
+        // siblings' paint phase, then stack everything by document order.
+        // Absolute children are positioned via data-pos="absolute"; only the
+        // in-flow ones need gui-relative (and it must NOT override that absolute).
+        if (!isAbsolute) addClass(childEl, 'gui-relative')
+        childEl.style.zIndex = String(renderIndex)
+      }
       div.appendChild(childEl)
+      renderIndex++
       if (!isAbsolute) { flowChildCount++; prevFlowChild = child }
     }
   }
@@ -1814,6 +1838,22 @@ function wrapHref(child: HTMLElement, href: string | null): HTMLElement {
   return a
 }
 
+/**
+ * Render-only wrap tolerance for fixed-width text, as a fraction of the box width.
+ *
+ * The exported `w` is Figma's exact measured width and is never modified. But
+ * browsers shape text ~0.5–0.7% *wider* than Figma's text engine (measured: a
+ * line Figma fit in 555.81px renders at 559.25px in Chrome — no font-smoothing,
+ * kerning, or text-rendering setting changes this). On a box sized to Figma's
+ * tight wrap that surplus tips the last word onto a new line. We widen the
+ * rendered box by this fraction so the browser reproduces Figma's wrapping.
+ *
+ * Proportional (not a fixed px) because the drift scales with line length. Kept
+ * comfortably below a word's width, so it can never pull a new word onto a line —
+ * it only absorbs sub-percent shaping drift.
+ */
+const TEXT_WRAP_TOLERANCE = 0.01
+
 function renderText(el: Element, assets: Record<string, string>, ctx: Ctx): HTMLElement {
   const div = document.createElement('gui-text') as HTMLElement
   position(div, el, ctx)
@@ -1829,6 +1869,16 @@ function renderText(el: Element, assets: Record<string, string>, ctx: Ctx): HTML
   const listLevel = get(el, 'list-level')
   const listMarker = get(el, 'list-marker')
   const hasFixedHeight = get(el, 'h') !== null
+
+  // Fixed-width text: widen by the wrap tolerance so browser shaping matches
+  // Figma's wrap. Skipped for single-line ellipsis (nowrap — wrapping N/A).
+  const wRaw = get(el, 'w')
+  const wNum = wRaw === null ? NaN : parseFloat(wRaw)
+  const isFixedWidth = !Number.isNaN(wNum) && wRaw !== 'hug' && wRaw !== 'fill'
+  const isSingleLineEllipsis = overflow === 'ellipsis' && !truncate && !maxLines
+  if (isFixedWidth && !isSingleLineEllipsis) {
+    div.style.setProperty('--gui-w', `${wNum * (1 + TEXT_WRAP_TOLERANCE)}px`)
+  }
 
   if (align) div.style.textAlign = align as CanvasTextAlign
 
@@ -3005,6 +3055,9 @@ export function render(
   }
 
   requestAnimationFrame(() => {
+    // A newer render() may have cleared the container before this frame ran,
+    // detaching our stage. Panzoom throws on detached elements, so bail out.
+    if (!stage.isConnected) return
     baseZoom = fitZoom()
     const pan = centeredPan(baseZoom)
     panzoom = Panzoom(stage, {

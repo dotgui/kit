@@ -1,7 +1,7 @@
 {
   "name": "@dotgui/kit",
   "version": "0.1.0",
-  "description": "The dotgui engine in one package: parser, validator, HTML renderer, and CCACT quality scorer.",
+  "description": "The dotgui engine in one package: parser, validator, HTML renderer, and CCAC quality scorer.",
   "license": "MIT",
   "type": "module",
   "main": "./src/index.ts",
@@ -27,8 +27,12 @@
     "README.md"
   ],
   "scripts": {
+    "gen:spec": "bun run scripts/gen-spec.ts",
+    "gen:spec:check": "bun run scripts/gen-spec.ts && git -C ../core diff --exit-code spec/spec.json",
     "typecheck": "tsc --noEmit",
-    "build:render": "bun build ./src/render/index.ts --outfile ./dist/render.js --format esm"
+    "build": "bun run build:render",
+    "build:render": "bun build ./src/render/index.ts --outfile ./dist/render.js --format esm",
+    "prepublishOnly": "bun run build:render"
   },
   "keywords": ["dotgui", "gui", "parser", "render", "validate", "score"],
   "repository": {

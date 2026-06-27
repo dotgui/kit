@@ -1,5 +1,6 @@
 /**
- * The output shapes of gui-score. These mirror core/spec/QUALITY.md exactly:
+ * The output shapes of gui-score. These mirror core/spec/QUALITY.md (the CCAC
+ * quality model) exactly:
  * every scored level emits the same envelope `{ score, audits }`; the audit
  * objects carry level-specific fields on top of a common spine.
  */
@@ -60,13 +61,18 @@ export interface GateFailure {
   details: GateDetail[]
 }
 
-/** A passing gate followed by the CCACT report. CT are NA until gui.farm exists. */
+/**
+ * A passing gate followed by the CCAC report. All four levels are local,
+ * deterministic and zero-AI (QUALITY.md). The fourth, Comprehensible, scores
+ * how AI-ready the file is as semantics — reach-coverage over its declared
+ * `role=` anchors (each role documents its subtree as far as its catalog `reach`;
+ * the score is the fraction of nodes documented). No inference, no confidence.
+ */
 export interface ScoreReport {
   clean: LevelResult | NaLevel
   consistent: LevelResult
   accessible: LevelResult
-  conventional: NaLevel
-  trend: NaLevel
+  comprehensible: LevelResult
 }
 
 export type ScoreOutput = ScoreReport | GateFailure
