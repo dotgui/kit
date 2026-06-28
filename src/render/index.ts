@@ -1660,7 +1660,12 @@ function renderFrame(el: Element, assets: Record<string, string>, ctx: Ctx, isSt
         childEl.style.zIndex = String(flowChildTotal - flowChildCount - 1)
       }
       if (explicitAppearance) {
-        if (!childEl.classList.contains('gui-absolute')) addClass(childEl, 'gui-relative')
+        // Absolute children are positioned via data-pos="absolute"; adding
+        // gui-relative would clobber that position:absolute (collapsing the
+        // shape to 0×0, since gui-shape defaults to display:inline) and let the
+        // frame's own appearance fill paint over them. Only in-flow children
+        // need gui-relative — same guard the orderedStack branch uses below.
+        if (!isAbsolute && !childEl.classList.contains('gui-absolute')) addClass(childEl, 'gui-relative')
         if (!reverseZ || isAbsolute) childEl.style.zIndex = '1'
       }
       if (orderedStack) {
