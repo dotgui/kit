@@ -1859,6 +1859,33 @@ function wrapHref(child: HTMLElement, href: string | null): HTMLElement {
  */
 const TEXT_WRAP_TOLERANCE = 0.01
 
+/**
+ * Resolve a text attribute, preferring a direct attr and falling back to the
+ * node's named text-style (mirrors applyTextStyle's styledAttr lookup). Used to
+ * inspect line-height / font-size outside applyTextStyle.
+ */
+function resolveTextAttr(guiEl: Element, name: string): string | null {
+  const direct = get(guiEl, name)
+  if (direct !== null) return direct
+  const styleName = getRaw(guiEl, 'text-style')
+  const namedStyle = styleName ? activeStyles[styleName] : null
+  if (namedStyle && namedStyle[name] !== undefined) return resolveToken(namedStyle[name])
+  return null
+}
+
+/** Effective line-height in px from a dotgui line-height value + font-size. */
+function lineHeightPx(lh: string, fontSizePx: number): number {
+  const v = lh.trim()
+  if (/^-?\d+(\.\d+)?$/.test(v)) {
+    // Bare number: ≤ 4 → unitless multiplier, > 4 → px (matches lineHeight())
+    const n = parseFloat(v)
+    return n > 0 && n <= 4 ? n * fontSizePx : n
+  }
+  if (v.endsWith('%')) return (parseFloat(v) / 100) * fontSizePx
+  if (v.endsWith('px')) return parseFloat(v)
+  return NaN
+}
+
 function renderText(el: Element, assets: Record<string, string>, ctx: Ctx): HTMLElement {
   const div = document.createElement('gui-text') as HTMLElement
   position(div, el, ctx)
@@ -1883,6 +1910,22 @@ function renderText(el: Element, assets: Record<string, string>, ctx: Ctx): HTML
   const isSingleLineEllipsis = overflow === 'ellipsis' && !truncate && !maxLines
   if (isFixedWidth && !isSingleLineEllipsis) {
     div.style.setProperty('--gui-w', `${wNum * (1 + TEXT_WRAP_TOLERANCE)}px`)
+  }
+
+  // Single-line heading guard: a fixed-height box whose height fits one line is
+  // a heading Figma kept on one line. Browser shaping runs a few % wider than
+  // Figma's engine (more so at heavy display weights), which can wrap it to a
+  // 2nd line that then clips/overlaps inside the 1-line box. Force nowrap so the
+  // small surplus spills into the parent gutter instead of colliding.
+  let singleLineHeading = false
+  if (hasFixedHeight && !truncate && !maxLines) {
+    const hNum = parseFloat(get(el, 'h') || '')
+    const fsRaw = resolveTextAttr(el, 'font-size')
+    const lhRaw = resolveTextAttr(el, 'line-height')
+    if (Number.isFinite(hNum) && fsRaw && lhRaw) {
+      const lhPx = lineHeightPx(lhRaw, parseFloat(fsRaw))
+      if (Number.isFinite(lhPx) && lhPx > 0) singleLineHeading = Math.round(hNum / lhPx) <= 1
+    }
   }
 
   if (align) div.style.textAlign = align as CanvasTextAlign
@@ -2013,7 +2056,13 @@ function renderText(el: Element, assets: Record<string, string>, ctx: Ctx): HTML
   const href = get(el, 'href')
 
   const clamp = maxLines || (truncate ? '1' : null)
-  if (hasFixedHeight || clamp) addClass(div, 'gui-overflow-hidden')
+  if (singleLineHeading && !clamp) {
+    // Keep the heading on one line; don't clip — let the shaping surplus spill
+    // into the parent gutter rather than wrap to a colliding 2nd line.
+    div.style.whiteSpace = 'nowrap'
+  } else if (hasFixedHeight || clamp) {
+    addClass(div, 'gui-overflow-hidden')
+  }
 
   if (va && va !== 'top') {
     div.style.display = 'flex'
