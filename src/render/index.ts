@@ -2009,6 +2009,13 @@ function renderText(el: Element, assets: Record<string, string>, ctx: Ctx): HTML
   const paragraphSpacing = get(el, 'paragraph-spacing')
   if (paragraphSpacing) div.style.marginBottom = `${paragraphSpacing}px`
 
+  // First-line indent (Figma uses it to flow text after inline highlight boxes:
+  // the indent pushes the first line clear of an absolutely-placed sibling box,
+  // and the remainder wraps to the next line at x=0). Without it the text starts
+  // at x=0 and collides with the highlight boxes.
+  const paragraphIndent = get(el, 'paragraph-indent')
+  if (paragraphIndent) div.style.textIndent = `${paragraphIndent}px`
+
   // Check for gradient fill in appearance — apply as background-clip:text
   const gradientFill = getAppearanceGradientFill(el)
   const hasGradientTextFill = !!gradientFill
