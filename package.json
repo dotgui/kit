@@ -1,6 +1,6 @@
 {
   "name": "@dotgui/kit",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "The dotgui engine in one package: parser, validator, HTML renderer, and CCAC quality scorer.",
   "license": "MIT",
   "type": "module",
@@ -11,7 +11,10 @@
     "./types": "./src/schema/types.ts",
     "./validate": "./src/schema/validate.ts",
     "./parser": "./src/parser/index.ts",
-    "./render": "./src/render/index.ts",
+    "./render": {
+      "types": "./src/render/index.ts",
+      "default": "./dist/render.js"
+    },
     "./score": "./src/score/index.ts",
     "./package": "./src/package/index.ts",
     "./lint": "./src/lint/index.ts",
@@ -34,10 +37,17 @@
     "build:render": "bun build ./src/render/index.ts --outfile ./dist/render.js --format esm",
     "prepublishOnly": "bun run build:render"
   },
-  "keywords": ["dotgui", "gui", "parser", "render", "validate", "score"],
+  "keywords": [
+    "dotgui",
+    "gui",
+    "parser",
+    "render",
+    "validate",
+    "score"
+  ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/barrel/dotgui"
+    "url": "https://github.com/dotgui/kit"
   },
   "dependencies": {
     "@panzoom/panzoom": "^4.6.2",

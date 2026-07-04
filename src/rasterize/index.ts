@@ -38,6 +38,7 @@ async function findExecutable(engine: Engine): Promise<string | null> {
   // Full puppeteer: use the Chromium it downloaded.
   if (engine === 'puppeteer') {
     try {
+      // @ts-ignore optional runtime dependency — not installed by default, caught below if missing
       const pptr: any = await import('puppeteer')
       const p: string | undefined = (pptr.executablePath ?? pptr.default?.executablePath)?.()
       if (p && existsSync(p)) return p
