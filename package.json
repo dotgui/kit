@@ -1,6 +1,6 @@
 {
   "name": "@dotgui/kit",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "The dotgui engine in one package: parser, validator, HTML renderer, and CCAC quality scorer.",
   "license": "MIT",
   "type": "module",
