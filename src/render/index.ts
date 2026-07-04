@@ -1530,21 +1530,23 @@ function renderFrame(el: Element, assets: Record<string, string>, ctx: Ctx, isSt
     if (htmlTag === 'gui-stack' && dir !== 'grid') div.setAttribute('direction', dir)
     const alignVal = getRaw(el, 'align')
     if (alignVal) div.setAttribute('align', alignVal)
-    const gapRaw = getRaw(el, 'gap')
-    if (gapRaw !== null) div.setAttribute('gap', gapRaw)
+    // Resolve $token refs on gap (mirrors padding above); 'auto' has no $ so
+    // the [gap="auto"] CSS selector still matches after resolution.
+    const gapVal = get(el, 'gap')
+    if (gapVal !== null) div.setAttribute('gap', gapVal)
     const wrapVal = getRaw(el, 'wrap')
     if (wrapVal !== null && wrapVal !== 'false') div.setAttribute('wrap', 'true')
 
     if (dir === 'grid') {
       stackDirection = 'grid'
       const isGridTag = srcTag === 'grid'
-      const gapRaw = isGridTag ? getRaw(el, 'gap') : null
+      const gapVal = isGridTag ? get(el, 'gap') : null
 
       if (isGridTag) {
-        const unitAttr = getRaw(el, 'unit')
+        const unitAttr = get(el, 'unit')
         // cols: new attr name, falls back to legacy 'columns' alias
-        const colsAttr = getRaw(el, 'cols') || getRaw(el, 'columns')
-        const rowsAttr = getRaw(el, 'rows')
+        const colsAttr = get(el, 'cols') || get(el, 'columns')
+        const rowsAttr = get(el, 'rows')
 
         if (unitAttr !== null) {
           // ── Unit grid mode (RFC 032) ─────────────────────────────────────
@@ -1559,8 +1561,8 @@ function renderFrame(el: Element, assets: Record<string, string>, ctx: Ctx, isSt
           // ── Track grid mode (RFC 032) ────────────────────────────────────
           if (colsAttr) div.style.gridTemplateColumns = parseTrackTemplate(colsAttr)
           if (rowsAttr) div.style.gridTemplateRows    = parseTrackTemplate(rowsAttr)
-          if (gapRaw !== null) {
-            const parts = (gapRaw || '0').trim().split(/\s+/)
+          if (gapVal !== null) {
+            const parts = (gapVal || '0').trim().split(/\s+/)
             const colG = parts[0]; const rowG = parts[1] || parts[0]
             if (colG && colG !== 'auto') div.style.columnGap = `${colG}px`
             if (rowG && rowG !== 'auto') div.style.rowGap    = `${rowG}px`
@@ -1569,8 +1571,8 @@ function renderFrame(el: Element, assets: Record<string, string>, ctx: Ctx, isSt
           // ── Legacy auto-flow (columns="N") ──────────────────────────────
           const legacyCols = get(el, 'columns') || get(el, 'cols')
           if (legacyCols) div.style.gridTemplateColumns = `repeat(${legacyCols}, 1fr)`
-          if (gapRaw) {
-            const parts = gapRaw.trim().split(/\s+/)
+          if (gapVal) {
+            const parts = gapVal.trim().split(/\s+/)
             const fg = parts[0]; const sg = parts[1] || parts[0]
             if (fg === 'auto') div.style.columnGap = '0px'; else if (fg) div.style.columnGap = `${fg}px`
             if (sg === 'auto') div.style.rowGap = '0px';    else if (sg) div.style.rowGap    = `${sg}px`
@@ -1593,7 +1595,7 @@ function renderFrame(el: Element, assets: Record<string, string>, ctx: Ctx, isSt
       const rzVal = getRaw(el, 'reverse-z')
       reverseZ = rzVal !== null && rzVal !== 'false'
       // Numeric gap handled in JS; align handled by CSS attribute selectors
-      negativeGap = applyGapLayout(div, stackDirection, gapRaw)
+      negativeGap = applyGapLayout(div, stackDirection, gapVal)
     }
   }
 
