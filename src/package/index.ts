@@ -230,8 +230,9 @@ export function setDocument(pkg: GuiPackage, name: string, xml: string): GuiPack
 
 /** Replace (or add) library.guix. Validated on its own: a library depends on nothing. */
 export function setLibrary(pkg: GuiPackage, xml: string): GuiPackage {
-  const result = validate(xml)
-  if (!result.valid) throw new InvalidMarkupError(result.errors)
+  // A library may be declarations only: no layout root is not an error here.
+  const errors = validate(xml).errors.filter((e) => e.code !== 'NO_ROOT_NODE')
+  if (errors.length > 0) throw new InvalidMarkupError(errors)
   return { ...pkg, library: xml }
 }
 

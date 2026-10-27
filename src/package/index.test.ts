@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate'
 import {
   unpack, pack, flatten, validateDocument, listDocuments, getDocument,
-  isMultiDocument, setMarkup, setDocument, info, InvalidMarkupError,
+  isMultiDocument, setMarkup, setDocument, setLibrary, info, InvalidMarkupError,
 } from './index'
 
 function zip(files: Record<string, string>): Uint8Array {
@@ -127,6 +127,14 @@ describe('multi-document packages', () => {
     }))
     expect(validateDocument(pkg, '01-a.guix').valid).toBe(true)
     expect(validateDocument(pkg, '02-b.guix').errors.map((e) => e.code)).toContain('VERSION_BELOW_PACKAGE')
+  })
+
+  test('a library may be declarations only', () => {
+    const pkg = unpack(zip({ 'design.guix': '<gui version="0.3"><col w="10" fill="$primary" /></gui>' }))
+    const lib = '<gui version="0.3"><tokens><color name="primary" value="#000" /></tokens></gui>'
+    const next = setLibrary(pkg, lib)
+    expect(validateDocument(next).valid).toBe(true)
+    expect(() => setLibrary(pkg, '<gui version="0.3"><tokens><color name="x" value="nope" /></tokens></gui>')).toThrow(InvalidMarkupError)
   })
 
   test('setDocument refuses a document that breaks the package rules', () => {
