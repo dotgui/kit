@@ -29,10 +29,15 @@ export interface ValidationResult {
 // Minimal element representation (mirrors GUIElement in gui-optimizer)
 // ---------------------------------------------------------------------------
 
-interface El {
+export interface El {
   tag: string
   attrs: Record<string, string>
   children: El[]
+}
+
+/** Parse markup into the validator's bare element tree. Throws on bad XML. */
+export function parseTree(xml: string): El {
+  return parse(xml)
 }
 
 // ---------------------------------------------------------------------------
