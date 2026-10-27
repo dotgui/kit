@@ -131,7 +131,7 @@ describe('multi-document packages', () => {
 
   test('a library may be declarations only', () => {
     const pkg = unpack(zip({ 'design.guix': '<gui version="0.3"><col w="10" fill="$primary" /></gui>' }))
-    const lib = '<gui version="0.3"><tokens><color name="primary" value="#000" /></tokens></gui>'
+    const lib = '<gui version="0.3"><tokens><color name="primary" value="#000000" /></tokens></gui>'
     const next = setLibrary(pkg, lib)
     expect(validateDocument(next).valid).toBe(true)
     expect(() => setLibrary(pkg, '<gui version="0.3"><tokens><color name="x" value="nope" /></tokens></gui>')).toThrow(InvalidMarkupError)
