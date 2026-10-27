@@ -2730,6 +2730,34 @@ function applyScaleConstraints(node: Element, scaleX: number, scaleY: number): v
   }
 }
 
+/**
+ * RFC-0044: puts each `<slot name>` fill of the instance into the body's
+ * container carrying that `slot`, replacing its fallback children. A slot left
+ * unfilled keeps its fallback; one that ends up empty is removed outright, so
+ * it takes no size, padding, or share of its parent's gap.
+ */
+function fillSlots(body: Element, instance: Element): void {
+  const fills = new Map<string, Element>()
+  for (const child of Array.from(instance.children)) {
+    const name = child.tagName === 'slot' ? child.getAttribute('name') : null
+    if (name && !fills.has(name)) fills.set(name, child)
+  }
+
+  const visit = (node: Element): void => {
+    for (const child of Array.from(node.children)) {
+      const name = child.getAttribute('slot')
+      if (name === null) { visit(child); continue }
+      const fill = fills.get(name)
+      if (fill) {
+        while (child.firstChild) child.removeChild(child.firstChild)
+        for (const content of Array.from(fill.children)) child.appendChild(content.cloneNode(true))
+      }
+      if (child.children.length === 0) node.removeChild(child)
+    }
+  }
+  visit(body)
+}
+
 function renderInstance(el: Element, assets: Record<string, string>, ctx: Ctx): HTMLElement | null {
   const compId = get(el, 'component')
   if (!compId) return null
@@ -2742,6 +2770,8 @@ function renderInstance(el: Element, assets: Record<string, string>, ctx: Ctx): 
   const body = bodyEl.cloneNode(true) as Element
 
   applyPropsToBody(body, el, compEl)
+  // After props, so slot content never reads them (RFC-0044 rule 9).
+  fillSlots(body, el)
 
   // Compute scale factors if instance overrides w/h vs component body dimensions
   const origW = parseFloat(bodyEl.getAttribute('w') || '0')

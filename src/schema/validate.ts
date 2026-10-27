@@ -174,9 +174,12 @@ const ALL_KNOWN_TAGS = new Set([
   'segment',
   // shape path data child
   'path',
-  // component / instance system (RFC-0008, RFC-0034)
-  'component', 'component-set', 'variant', 'props', 'prop',
+  // component / instance system (RFC-0008, RFC-0034, RFC-0044)
+  'component', 'component-set', 'variant', 'props', 'prop', 'slot',
 ])
+
+/** Layout containers that can be a slot (RFC-0044). */
+const SLOT_CONTAINERS = new Set(['frame', 'stack', 'row', 'col', 'grid'])
 
 const LAYOUT_DIRECTIONS = new Set(['horizontal', 'vertical', 'grid'])
 const SHAPE_TYPES = new Set(['rect', 'ellipse', 'line', 'path'])
@@ -296,6 +299,12 @@ export function validate(guiXml: string, options: ValidateOptions = {}): Validat
   }
 
   const version = root.attrs.version || null
+
+  // Rules that arrived in 0.3 are errors in a document declaring 0.3 or higher
+  // and warnings in one written before them.
+  const versionMatch = /^(\d+)\.(\d+)/.exec((version || '').trim())
+  const strict = !!versionMatch && (Number(versionMatch[1]) > 0 || Number(versionMatch[2]) >= 3)
+  const violation = strict ? err : warn
 
   // Version check
   if (!version) {
@@ -537,6 +546,14 @@ export function validate(guiXml: string, options: ValidateOptions = {}): Validat
         if (!el.attrs.component) {
           err('MISSING_ATTR', `<instance> missing required attribute: component`, path)
         }
+        // RFC-0044: an instance's children are only <slot> fills; what each
+        // fill holds is ordinary content. The fills are checked against the
+        // component once every component is known.
+        el.children.forEach(function(child, i) {
+          const childPath = `${path} > ${child.tag}[${i}]`
+          if (child.tag === 'slot') validateChildren(child, childPath)
+          else violation('SLOT_FILL', `<instance component="${el.attrs.component}"> may only contain <slot> elements, found <${child.tag}>`, childPath)
+        })
         break
       }
 
@@ -654,6 +671,8 @@ export function validate(guiXml: string, options: ValidateOptions = {}): Validat
       const childPath = `${path} > ${child.tag}[${i}]`
       if (child.tag === 'appearance') {
         validateNode(child, childPath, el.tag)
+      } else if (child.tag === 'slot') {
+        violation('SLOT_MISPLACED', `<slot name="${child.attrs.name ?? ''}"> is only valid directly inside an <instance>`, childPath)
       } else if (CHILD_TAGS.has(child.tag)) {
         validateNode(child, childPath, el.tag)
       } else {
@@ -735,12 +754,13 @@ export function validate(guiXml: string, options: ValidateOptions = {}): Validat
     validateNode(layoutRoot, `gui > ${layoutRoot.tag}`, 'gui')
   }
 
+  // Slots (RFC-0044): declared on a component's layout containers, filled by
+  // name inside an instance.
+  checkSlots(root, violation, warn)
+
   // Asset references (RFC-0043): never a data: URI, and in a standalone
   // document never a local path. These are 0.3 rules — errors in a document
   // declaring 0.3 or higher, warnings in one written before them.
-  const versionMatch = /^(\d+)\.(\d+)/.exec((version || '').trim())
-  const strict = !!versionMatch && (Number(versionMatch[1]) > 0 || Number(versionMatch[2]) >= 3)
-  const violation = strict ? err : warn
   const tokenValues = new Map<string, string>()
   if (tokensEl) {
     for (const t of tokensEl.children) {
@@ -779,4 +799,137 @@ export function validate(guiXml: string, options: ValidateOptions = {}): Validat
     errors,
     warnings,
   }
+}
+
+// ---------------------------------------------------------------------------
+// Slots (RFC-0044)
+// ---------------------------------------------------------------------------
+
+type Report = (code: string, message: string, path: string) => void
+
+interface SlotComponent {
+  body: El | undefined
+  /** Slot containers by name. */
+  slots: Map<string, El>
+}
+
+/**
+ * Checks slot declarations and every instance's fills, with the native
+ * renderer's rules and messages. `violation` reports an error from 0.3 (a
+ * warning before); `advise` reports `slot-min` / `slot-max`, which never fail.
+ */
+function checkSlots(root: El, violation: Report, advise: Report) {
+  const components = new Map<string, SlotComponent>()
+  const sets = new Map<string, string[]>()
+  const componentsEl = root.children.find((c) => c.tag === 'components')
+
+  function declareComponent(id: string, holder: El, path: string) {
+    const body = holder.children.find((c) => c.tag !== 'props')
+    const slots = new Map<string, El>()
+    if (body?.attrs.slot !== undefined) {
+      violation('SLOT_DECLARATION', `component '${id}': a slot may not be the component's root`, path)
+    }
+    function collect(node: El, insideSlot: boolean) {
+      for (const child of node.children) {
+        const name = child.attrs.slot
+        if (name === undefined) { collect(child, insideSlot); continue }
+        if (insideSlot) violation('SLOT_DECLARATION', `component '${id}': slot '${name}' is declared inside another slot`, path)
+        if (!SLOT_CONTAINERS.has(child.tag)) {
+          violation('SLOT_DECLARATION', `component '${id}': slot '${name}' is on a <${child.tag}>, but only a layout container can be a slot`, path)
+        }
+        if (!name.trim()) violation('SLOT_DECLARATION', `component '${id}': a slot has an empty name`, path)
+        else if (slots.has(name)) violation('SLOT_DECLARATION', `component '${id}': slot '${name}' is declared twice`, path)
+        else slots.set(name, child)
+        collect(child, true)
+      }
+    }
+    if (body) collect(body, false)
+    components.set(id, { body, slots })
+  }
+
+  componentsEl?.children.forEach((comp, i) => {
+    const path = `gui > components > ${comp.tag}[${i}]`
+    if (comp.tag === 'component' && comp.attrs.id) declareComponent(comp.attrs.id, comp, path)
+    if (comp.tag === 'component-set' && comp.attrs.id) {
+      const variants: string[] = []
+      for (const v of comp.children) {
+        if (v.tag === 'variant' && v.attrs.id) { variants.push(v.attrs.id); declareComponent(v.attrs.id, v, path) }
+      }
+      sets.set(comp.attrs.id, variants)
+    }
+  })
+
+  /** Whether `nodes` reach an instance of `id`, through slot content or component bodies. */
+  function reaches(id: string, nodes: El[], seen: Set<string>): boolean {
+    for (const node of nodes) {
+      if (node.tag === 'instance' && node.attrs.component) {
+        const target = node.attrs.component
+        if (target === id) return true
+        if (!seen.has(target)) {
+          seen.add(target)
+          const body = components.get(target)?.body
+          if (body && reaches(id, [body], seen)) return true
+        }
+      }
+      if (reaches(id, node.children, seen)) return true
+    }
+    return false
+  }
+
+  function checkInstance(el: El, path: string) {
+    const id = el.attrs.component
+    const component = id ? components.get(id) : undefined
+    if (!id || !component) return
+    const filled = new Set<string>()
+    for (const fill of el.children) {
+      if (fill.tag !== 'slot') continue // reported where the instance is validated
+      const name = fill.attrs.name
+      if (!name || !name.trim()) {
+        violation('SLOT_FILL', `<instance component="${id}"> has a <slot> without a name`, path)
+        continue
+      }
+      const slot = component.slots.get(name)
+      if (!slot) {
+        violation('SLOT_FILL', `<instance component="${id}"> fills slot '${name}', which the component does not declare`, path)
+        continue
+      }
+      if (filled.has(name)) {
+        violation('SLOT_FILL', `<instance component="${id}"> fills slot '${name}' twice`, path)
+        continue
+      }
+      filled.add(name)
+
+      if (reaches(id, fill.children, new Set())) {
+        violation('SLOT_SELF', `component '${id}' contains itself through slot '${name}'`, path)
+      }
+
+      const accept = slot.attrs['slot-accept']
+      if (accept !== undefined) {
+        const accepted = accept.split(/\s+/).filter(Boolean).flatMap((a) => sets.get(a) ?? [a])
+        for (const child of fill.children) {
+          const fits = child.tag === 'instance' && !!child.attrs.component && accepted.includes(child.attrs.component)
+          if (!fits) {
+            const what = child.tag === 'instance' && child.attrs.component ? `an instance of '${child.attrs.component}'` : `a <${child.tag}>`
+            violation('SLOT_ACCEPT', `slot '${name}' of component '${id}' accepts only instances of ${accept}, but was given ${what}`, path)
+          }
+        }
+      }
+
+      const count = fill.children.length
+      const bound = (attr: string) => {
+        const n = parseInt(slot.attrs[attr] ?? '', 10)
+        return Number.isFinite(n) ? n : undefined
+      }
+      const min = bound('slot-min')
+      const max = bound('slot-max')
+      if (min !== undefined && count < min) advise('SLOT_COUNT', `slot '${name}' of component '${id}' has ${count} item(s), fewer than slot-min ${min}`, path)
+      if (max !== undefined && count > max) advise('SLOT_COUNT', `slot '${name}' of component '${id}' has ${count} item(s), more than slot-max ${max}`, path)
+    }
+  }
+
+  function walk(el: El, path: string) {
+    if (el.tag === 'instance') checkInstance(el, path)
+    el.children.forEach((child, i) => walk(child, `${path} > ${child.tag}[${i}]`))
+  }
+  root.children.forEach((child, i) => walk(child, `gui > ${child.tag}[${i}]`))
 }
