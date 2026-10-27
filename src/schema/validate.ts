@@ -1,8 +1,8 @@
 /**
  * dotgui-core — Validator
- * Format version: 1.0
+ * Reads documents up to spec 0.3.4 (see SUPPORTED_VERSION).
  *
- * Validates a .guix markup string against the dotgui-core v1.0 spec.
+ * Validates a .guix markup string against the dotgui spec.
  * Goes beyond structural checks — resolves token refs, asset refs,
  * and enforces contextual constraints that XSD cannot express.
  */
@@ -245,6 +245,26 @@ function isNumeric(value: string): boolean {
 // Main validator
 // ---------------------------------------------------------------------------
 
+/**
+ * The newest spec point this kit implements in full (spec 0.3.4: paint model,
+ * multi-document packages, standalone documents, slots). Support is
+ * cumulative; a document declaring a later point is refused rather than
+ * checked against rules this kit does not know. The kit's own version shares
+ * the spec's chapter and counts its own patch.
+ */
+export const SUPPORTED_VERSION = '0.3.4'
+const SUPPORTED: [number, number, number] = [0, 3, 4]
+
+/** `major.minor.patch`; a missing part reads as 0. Not a version: null. */
+export function parseVersion(version: string): [number, number, number] | null {
+  const m = /^(\d+)\.(\d+)(?:\.(\d+))?$/.exec(version.trim())
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3] ?? 0)] : null
+}
+
+function compareVersions(a: [number, number, number], b: [number, number, number]): number {
+  return a[0] - b[0] || a[1] - b[1] || a[2] - b[2]
+}
+
 export interface ValidateOptions {
   /**
    * The markup is served on its own, outside any package (RFC-0043): asset
@@ -309,8 +329,13 @@ export function validate(guiXml: string, options: ValidateOptions = {}): Validat
   // Version check
   if (!version) {
     err('NO_VERSION', 'Missing required attribute: version', 'gui')
-  } else if (version !== '1.0') {
-    warn('UNKNOWN_VERSION', `Unknown version "${version}". This validator targets 1.0.`, 'gui')
+  } else {
+    const parsed = parseVersion(version)
+    if (!parsed) {
+      err('UNSUPPORTED_VERSION', `the document declares version "${version}", which is not a spec version`, 'gui')
+    } else if (compareVersions(parsed, SUPPORTED) > 0) {
+      err('UNSUPPORTED_VERSION', `the document declares version ${version}, but this validator reads documents up to version ${SUPPORTED_VERSION}; a newer kit is needed`, 'gui')
+    }
   }
 
   // Collect declared tokens, assets, and styles for ref resolution
