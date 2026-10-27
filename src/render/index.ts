@@ -2583,6 +2583,18 @@ const INSTANCE_POSITIONAL_ATTRS = new Set([
   'min-width', 'max-width', 'min-height', 'max-height',
 ])
 
+/** RFC-0034: a string prop named for exactly one <text> layer id targets it. */
+function implicitTarget(body: Element, name: string, type: string): string[] {
+  if (type !== 'string' && type !== 'text') return []
+  let count = 0
+  const visit = (el: Element): void => {
+    if (el.tagName === 'text' && el.getAttribute('id') === name) count++
+    for (const child of Array.from(el.children)) visit(child)
+  }
+  visit(body)
+  return count === 1 ? [name] : []
+}
+
 function applyPropsToBody(body: Element, instance: Element, compEl: Element): void {
   // Build prop name → { type, targets[], bind } map from declared <props> block
   const propMeta: Record<string, { type: string; targets: string[]; bind: string | null }> = {}
@@ -2594,9 +2606,13 @@ function applyPropsToBody(body: Element, instance: Element, compEl: Element): vo
       const propType = propEl.getAttribute('type')
       const propTarget = propEl.getAttribute('target')
       const propBind = propEl.getAttribute('bind')
-      if (!propName || !propType || !propTarget) continue
-      // target is a space-separated list of ids (RFC 0034 multi-target)
-      const targets = propTarget.trim().split(/\s+/).filter(Boolean)
+      if (!propName || !propType) continue
+      // target is a space-separated list of ids (RFC 0034 multi-target). A
+      // string prop may omit it when its name is the id of exactly one <text>.
+      const targets = propTarget
+        ? propTarget.trim().split(/\s+/).filter(Boolean)
+        : implicitTarget(body, propName, propType)
+      if (targets.length === 0) continue
       propMeta[propName] = { type: propType, targets, bind: propBind }
       const overrideVal = instance.getAttribute(propName)
       if (overrideVal === null) continue

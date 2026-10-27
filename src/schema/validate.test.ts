@@ -156,3 +156,58 @@ describe('version gate (spec points)', () => {
     expect(gateCodes('0.3.4.1')).toHaveLength(1)
   })
 })
+
+describe('typed props (RFC-0034)', () => {
+  const comp = (props: string, version = '0.3') => validate(`<gui version="${version}">
+    <components>
+      <component id="comp-card">
+        <props>${props}</props>
+        <col w="200"><text id="label" value="x" /><text id="note" value="y" /><rect id="surface" w="10" h="10" /></col>
+      </component>
+    </components>
+    <col w="10"><instance component="comp-card" /></col>
+  </gui>`)
+  const codes = (r: { errors: { code: string }[] }) => r.errors.map((e) => e.code)
+
+  test('every data type with its bind is accepted', () => {
+    const r = comp(`
+      <prop name="label" type="string" target="label" />
+      <prop name="align" type="string" target="label" bind="align" />
+      <prop name="off" type="boolean" target="surface" />
+      <prop name="bg" type="color" target="surface" />
+      <prop name="ring" type="color" target="surface" bind="stroke" />
+      <prop name="pic" type="image" target="surface" />
+      <prop name="icon" type="component" target="surface" />
+      <prop name="r" type="number" target="surface" bind="radius" />
+      <prop name="ts" type="style" target="label" bind="text-style" />
+      <prop name="both" type="color" target="label note" />`)
+    expect(r.errors).toEqual([])
+  })
+
+  test('number and style need bind, and a style bind names a style slot', () => {
+    const r = comp(`
+      <prop name="r" type="number" target="surface" />
+      <prop name="ts" type="style" target="label" />
+      <prop name="bad" type="style" target="label" bind="radius" />`)
+    expect(codes(r).filter((c) => c === 'PROP_NO_BIND')).toHaveLength(2)
+    expect(codes(r)).toContain('INVALID_PROP_BIND')
+  })
+
+  test('target may be omitted only by a string prop named for one <text> id', () => {
+    expect(comp('<prop name="label" type="string" />').errors).toEqual([])
+    expect(codes(comp('<prop name="title" type="string" />'))).toContain('PROP_NO_TARGET')
+    expect(codes(comp('<prop name="label" type="color" />'))).toContain('PROP_NO_TARGET')
+  })
+
+  test('an unknown type fails; the 0.1 names only warn', () => {
+    expect(codes(comp('<prop name="x" type="enum" target="label" />'))).toContain('INVALID_PROP_TYPE')
+    const legacy = comp('<prop name="label" type="text" target="label" />')
+    expect(legacy.errors).toEqual([])
+    expect(legacy.warnings.map((w) => w.code)).toContain('LEGACY_PROP_TYPE')
+  })
+
+  test('in a 0.2 document the prop rules only warn', () => {
+    const r = comp('<prop name="r" type="number" target="surface" />', '0.2')
+    expect(codes(r)).not.toContain('PROP_NO_BIND')
+  })
+})

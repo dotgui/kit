@@ -61,3 +61,26 @@ describe('slots in the HTML renderer (RFC-0044)', () => {
     expect(shows('#123456', 'rgb(18, 52, 86)')).toBe(false) // …the empty actions row is not
   })
 })
+
+describe('typed props in the HTML renderer (RFC-0034)', () => {
+  const doc = (props: string, instance: string) => `<gui version="0.3">
+    <components>
+      <component id="comp-chip">
+        <props>${props}</props>
+        <row><text id="label" value="Default label" /></row>
+      </component>
+    </components>
+    <col w="200">${instance}</col>
+  </gui>`
+
+  test('a string prop named for one <text> id needs no target', () => {
+    const html = renderToHTML(doc('<prop name="label" type="string" />', '<instance component="comp-chip" label="Implicit works" />'))
+    expect(html).toContain('Implicit works')
+    expect(html).not.toContain('Default label')
+  })
+
+  test('without a matching id, a target-less prop changes nothing', () => {
+    const html = renderToHTML(doc('<prop name="title" type="string" />', '<instance component="comp-chip" title="Nowhere" />'))
+    expect(html).toContain('Default label')
+  })
+})

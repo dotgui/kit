@@ -1,6 +1,6 @@
 /**
  * dotgui-core — Validator
- * Reads documents up to spec 0.3.4 (see SUPPORTED_VERSION).
+ * Reads documents up to spec 0.3.5 (see SUPPORTED_VERSION).
  *
  * Validates a .guix markup string against the dotgui spec.
  * Goes beyond structural checks — resolves token refs, asset refs,
@@ -178,6 +178,18 @@ const ALL_KNOWN_TAGS = new Set([
   'component', 'component-set', 'variant', 'props', 'prop', 'slot',
 ])
 
+/** RFC-0034 prop types: data types. */
+const PROP_TYPES = new Set(['string', 'boolean', 'number', 'color', 'image', 'component', 'style'])
+/** The 0.1 prop type names, still rendered, and what replaced them. */
+const LEGACY_PROP_TYPES: Record<string, string> = { text: 'string', visible: 'boolean', fill: 'color', src: 'image' }
+const STYLE_BINDS = new Set(['text-style', 'fill-style', 'effect-style', 'stroke-style'])
+
+function countTextIds(el: El, id: string): number {
+  let n = el.tag === 'text' && el.attrs.id === id ? 1 : 0
+  for (const child of el.children) n += countTextIds(child, id)
+  return n
+}
+
 /** Layout containers that can be a slot (RFC-0044). */
 const SLOT_CONTAINERS = new Set(['frame', 'stack', 'row', 'col', 'grid'])
 
@@ -246,14 +258,14 @@ function isNumeric(value: string): boolean {
 // ---------------------------------------------------------------------------
 
 /**
- * The newest spec point this kit implements in full (spec 0.3.4: paint model,
- * multi-document packages, standalone documents, slots). Support is
+ * The newest spec point this kit implements in full (spec 0.3.5: paint model,
+ * multi-document packages, standalone documents, slots, typed props). Support is
  * cumulative; a document declaring a later point is refused rather than
  * checked against rules this kit does not know. The kit's own version shares
  * the spec's chapter and counts its own patch.
  */
-export const SUPPORTED_VERSION = '0.3.4'
-const SUPPORTED: [number, number, number] = [0, 3, 4]
+export const SUPPORTED_VERSION = '0.3.5'
+const SUPPORTED: [number, number, number] = [0, 3, 5]
 
 /** `major.minor.patch`; a missing part reads as 0. Not a version: null. */
 export function parseVersion(version: string): [number, number, number] | null {
@@ -726,7 +738,7 @@ export function validate(guiXml: string, options: ValidateOptions = {}): Validat
   // Validate components section (RFC-0008 component/instance, RFC-0034 props).
   // Mirrors the parser's grammar: <component id> with an optional <props> and a
   // body layout node; <component-set id> of <variant id> entries.
-  function validateProps(propsEl: El, basePath: string) {
+  function validateProps(propsEl: El, basePath: string, body: El | undefined) {
     propsEl.children.forEach(function(p, i) {
       const pPath = `${basePath} > prop[${i}]`
       if (p.tag !== 'prop') {
@@ -734,14 +746,39 @@ export function validate(guiXml: string, options: ValidateOptions = {}): Validat
         return
       }
       if (!p.attrs.name) err('MISSING_ATTR', `<prop> missing required attribute: name`, pPath)
-      if (!p.attrs.type) err('MISSING_ATTR', `<prop> missing required attribute: type`, pPath)
-      if (!p.attrs.target) err('MISSING_ATTR', `<prop> missing required attribute: target`, pPath)
+      const type = p.attrs.type
+      if (!type) {
+        err('MISSING_ATTR', `<prop> missing required attribute: type`, pPath)
+        return
+      }
+      // RFC-0034: prop types are data types. The 0.1 names still render.
+      if (LEGACY_PROP_TYPES[type]) {
+        warn('LEGACY_PROP_TYPE', `<prop type="${type}"> is the old name; use type="${LEGACY_PROP_TYPES[type]}"`, pPath)
+      } else if (!PROP_TYPES.has(type)) {
+        violation('INVALID_PROP_TYPE', `<prop type="${type}"> must be one of ${[...PROP_TYPES].join(', ')}`, pPath)
+      }
+      if ((type === 'number' || type === 'style') && !p.attrs.bind) {
+        violation('PROP_NO_BIND', `<prop name="${p.attrs.name}" type="${type}"> needs bind: a ${type} could mean several attributes`, pPath)
+      }
+      if (type === 'style' && p.attrs.bind && !STYLE_BINDS.has(p.attrs.bind)) {
+        violation('INVALID_PROP_BIND', `<prop type="style"> bind must be one of ${[...STYLE_BINDS].join(', ')}, got "${p.attrs.bind}"`, pPath)
+      }
+      if (!p.attrs.target) {
+        // A string prop may omit target when its name is the id of exactly
+        // one <text> in the body.
+        const implicit = (type === 'string' || type === 'text') && p.attrs.name && body
+          ? countTextIds(body, p.attrs.name) === 1
+          : false
+        if (!implicit) {
+          violation('PROP_NO_TARGET', `<prop name="${p.attrs.name}"> needs target: only a string prop named for exactly one <text> id may omit it`, pPath)
+        }
+      }
     })
   }
   function validateComponentBody(parent: El, path: string) {
     const propsEl = parent.children.find(function(c) { return c.tag === 'props' })
-    if (propsEl) validateProps(propsEl, `${path} > props`)
     const bodyEl = parent.children.find(function(c) { return c.tag !== 'props' })
+    if (propsEl) validateProps(propsEl, `${path} > props`, bodyEl)
     if (bodyEl) {
       if (CHILD_TAGS.has(bodyEl.tag)) validateNode(bodyEl, `${path} > ${bodyEl.tag}`, parent.tag)
       else warn('UNEXPECTED_CHILD', `Component body must be a layout node, got <${bodyEl.tag}>`, `${path} > ${bodyEl.tag}`)
