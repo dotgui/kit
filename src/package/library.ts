@@ -185,9 +185,15 @@ function below(v: [number, number], floor: [number, number]): boolean {
  * rules, then the ordinary validator over the document with the library
  * inlined, so a name that resolves in neither place is reported.
  *
- * `inPackage` is true when the package has a library or several documents.
+ * `inPackage` is true when the package has a library or several documents;
+ * `standalone` when the markup was served on its own (RFC-0043).
  */
-export function validateInPackage(documentXml: string, libraryXml: string | undefined, inPackage: boolean): ValidationResult {
+export function validateInPackage(
+  documentXml: string,
+  libraryXml: string | undefined,
+  inPackage: boolean,
+  standalone = false,
+): ValidationResult {
   const errors: ValidationError[] = []
 
   let root: El
@@ -225,7 +231,7 @@ export function validateInPackage(documentXml: string, libraryXml: string | unde
     }
   }
 
-  const result = validate(markup)
+  const result = validate(markup, { standalone })
   const all = [...errors, ...result.errors]
   return { ...result, valid: all.length === 0, errors: all }
 }
