@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { validate } from './validate'
+import { validate, parseVersion, SUPPORTED_VERSION } from './validate'
 
 const codes = (r: { errors: { code: string }[] }) => r.errors.map((e) => e.code)
 const warningCodes = (r: { warnings: { code: string }[] }) => r.warnings.map((e) => e.code)
@@ -126,5 +126,33 @@ describe('slots (RFC-0044)', () => {
     const r = validate(doc(`<instance component="comp-screen"><slot name="nope"><text value="x" /></slot></instance>`, '0.2'))
     expect(r.errors.map((e) => e.code)).not.toContain('SLOT_FILL')
     expect(r.warnings.map((e) => e.code)).toContain('SLOT_FILL')
+  })
+})
+
+describe('version gate (spec points)', () => {
+  const at = (v: string) => validate(`<gui version="${v}"><col w="10" /></gui>`)
+  const gateCodes = (v: string) => at(v).errors.map((e) => e.code).filter((c) => c === 'UNSUPPORTED_VERSION')
+
+  test('every point up to the supported one is read, a bare chapter as its start', () => {
+    for (const v of ['0.1', '0.2', '0.3', '0.3.0', '0.3.1', SUPPORTED_VERSION]) {
+      expect(gateCodes(v)).toEqual([])
+      expect(at(v).warnings.map((w) => w.code)).not.toContain('UNKNOWN_VERSION')
+    }
+  })
+
+  test('a later point or chapter is refused by name', () => {
+    const [major, minor, patch] = parseVersion(SUPPORTED_VERSION)!
+    const next = `${major}.${minor}.${patch + 1}`
+    const r = at(next)
+    expect(r.valid).toBe(false)
+    expect(r.errors.map((e) => e.message).join('\n')).toContain(`reads documents up to version ${SUPPORTED_VERSION}`)
+    expect(gateCodes('0.4')).toHaveLength(1)
+    // No spec has been 1.0; a file that says so is mislabelled by its producer.
+    expect(gateCodes('1.0')).toHaveLength(1)
+  })
+
+  test('something that is not a version is refused', () => {
+    expect(gateCodes('soon')).toHaveLength(1)
+    expect(gateCodes('0.3.4.1')).toHaveLength(1)
   })
 })
