@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate'
 import {
   unpack, pack, flatten, validateDocument, listDocuments, getDocument,
-  isMultiDocument, setMarkup, setDocument, setLibrary, info, InvalidMarkupError,
+  isMultiDocument, setMarkup, setDocument, setLibrary, addAsset, info, InvalidMarkupError,
 } from './index'
 
 function zip(files: Record<string, string>): Uint8Array {
@@ -142,5 +142,34 @@ describe('multi-document packages', () => {
     expect(() => setDocument(pkg, '03-new.guix', '<gui version="0.2"><col w="10" /></gui>')).toThrow(InvalidMarkupError)
     const next = setDocument(pkg, '03-new.guix', '<gui version="0.3"><col w="10" fill="$primary" /></gui>')
     expect(listDocuments(next)).toEqual(['01-welcome.guix', '02-done.guix', '03-new.guix'])
+  })
+})
+
+describe('standalone documents (RFC-0043)', () => {
+  const local = '<gui version="0.3"><col w="10"><img src="assets/hero.webp" w="1" h="1" /></col></gui>'
+
+  test('bare markup is read as a standalone document', () => {
+    const pkg = unpack(strToU8(local))
+    expect(pkg.standalone).toBe(true)
+    expect(validateDocument(pkg).errors.map((e) => e.code)).toContain('LOCAL_ASSET_IN_STANDALONE')
+  })
+
+  test('the same markup in a package may use a local path', () => {
+    const pkg = unpack(zip({ 'design.guix': local }))
+    expect(pkg.standalone).toBeUndefined()
+    expect(validateDocument(pkg).errors.map((e) => e.code)).not.toContain('LOCAL_ASSET_IN_STANDALONE')
+  })
+
+  test('adding a local asset promotes the document to a package', () => {
+    const pkg = addAsset(unpack(strToU8(local)), 'hero.webp', new Uint8Array([1]))
+    expect(pkg.standalone).toBeUndefined()
+    expect(validateDocument(pkg).valid).toBe(true)
+    expect(Object.keys(unzipSync(pack(pkg))).sort()).toEqual(['assets/hero.webp', 'design.guix'])
+  })
+
+  test('adding a second screen promotes it too', () => {
+    const pkg = setDocument(unpack(strToU8('<gui version="0.3"><col w="10" /></gui>')), '02-next.guix', '<gui version="0.3"><col w="10" /></gui>')
+    expect(pkg.standalone).toBeUndefined()
+    expect(listDocuments(pkg)).toEqual(['02-next.guix', 'design.guix'])
   })
 })

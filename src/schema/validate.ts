@@ -242,7 +242,29 @@ function isNumeric(value: string): boolean {
 // Main validator
 // ---------------------------------------------------------------------------
 
-export function validate(guiXml: string): ValidationResult {
+export interface ValidateOptions {
+  /**
+   * The markup is served on its own, outside any package (RFC-0043): asset
+   * references must be absolute URLs.
+   */
+  standalone?: boolean
+}
+
+/** Attributes whose whole value is an asset reference. */
+const ASSET_ATTRIBUTES = new Set(['src', 'mask-src'])
+
+function urlFunctions(value: string): string[] {
+  const out: string[] = []
+  const re = /url\(\s*(['"]?)([^'")]*)\1\s*\)/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(value))) out.push(m[2].trim())
+  return out
+}
+
+const isDataUri = (v: string) => /^\s*data:/i.test(v)
+const isAbsoluteUrl = (v: string) => /^https?:\/\//i.test(v.trim())
+
+export function validate(guiXml: string, options: ValidateOptions = {}): ValidationResult {
   const errors: ValidationError[] = []
   const warnings: ValidationError[] = []
 
@@ -711,6 +733,44 @@ export function validate(guiXml: string): ValidationResult {
     err('NO_ROOT_NODE', 'No root layout node found in <gui>. Expected <frame>, <stack>, or <group>.', 'gui')
   } else {
     validateNode(layoutRoot, `gui > ${layoutRoot.tag}`, 'gui')
+  }
+
+  // Asset references (RFC-0043): never a data: URI, and in a standalone
+  // document never a local path. These are 0.3 rules — errors in a document
+  // declaring 0.3 or higher, warnings in one written before them.
+  const versionMatch = /^(\d+)\.(\d+)/.exec((version || '').trim())
+  const strict = !!versionMatch && (Number(versionMatch[1]) > 0 || Number(versionMatch[2]) >= 3)
+  const violation = strict ? err : warn
+  const tokenValues = new Map<string, string>()
+  if (tokensEl) {
+    for (const t of tokensEl.children) {
+      if (t.attrs.name && t.attrs.value !== undefined) tokenValues.set(t.attrs.name, t.attrs.value)
+      for (const v of Object.values(t.attrs)) {
+        if (isDataUri(v) || urlFunctions(v).some(isDataUri)) {
+          violation('DATA_URI', `token '${t.attrs.name}' holds a data: URI; assets are referenced, never inlined`, `gui > tokens > ${t.tag}`)
+          break
+        }
+      }
+    }
+  }
+  function checkAssets(el: El, path: string) {
+    for (const [attr, raw] of Object.entries(el.attrs)) {
+      const value = raw.startsWith('$') && tokenValues.has(raw.slice(1)) ? tokenValues.get(raw.slice(1))! : raw
+      const sources = urlFunctions(value)
+      if (ASSET_ATTRIBUTES.has(attr)) sources.push(value.trim())
+      for (const source of sources) {
+        if (!source || source.startsWith('$')) continue
+        if (isDataUri(source)) {
+          violation('DATA_URI', `<${el.tag} ${attr}> is a data: URI; assets are referenced, never inlined`, path)
+        } else if (options.standalone && !isAbsoluteUrl(source)) {
+          violation('LOCAL_ASSET_IN_STANDALONE', `<${el.tag} ${attr}="${source}"> is a local asset path, which a standalone document cannot have; use an absolute URL or package the document`, path)
+        }
+      }
+    }
+    for (const child of el.children) checkAssets(child, `${path} > ${child.tag}`)
+  }
+  for (const block of root.children) {
+    if (block.tag !== 'tokens') checkAssets(block, `gui > ${block.tag}`)
   }
 
   return {

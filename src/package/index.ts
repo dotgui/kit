@@ -40,6 +40,12 @@ export interface GuiPackage {
   primary?: string
   /** `library.guix`, the package's shared declarations, if present. */
   library?: string
+  /**
+   * Read from bare markup rather than a ZIP: a standalone document (RFC-0043),
+   * whose asset references must be absolute URLs. Packing it promotes it to a
+   * package, after which local assets are allowed.
+   */
+  standalone?: boolean
   /** Asset entries keyed by package path, e.g. "assets/hero.webp". */
   assets: Record<string, Uint8Array>
   /** preview.webp bytes, if present. */
@@ -77,7 +83,7 @@ function assetKey(name: string): string {
 export function unpack(bytes: Uint8Array): GuiPackage {
   // Raw .guix (not a zip) — the whole file is the markup, no assets/preview.
   if (!isZip(bytes)) {
-    return { xml: strFromU8(bytes), assets: {} }
+    return { xml: strFromU8(bytes), assets: {}, standalone: true }
   }
 
   const entries = unzipSync(bytes)
@@ -177,7 +183,7 @@ export function flatten(pkg: GuiPackage, name?: string): string {
 export function validateDocument(pkg: GuiPackage, name?: string): ValidationResult {
   const xml = name === undefined ? pkg.xml : getDocument(pkg, name)
   if (xml === undefined) throw new Error(`no document named ${name} in the package`)
-  return validateInPackage(xml, pkg.library, isMultiDocument(pkg))
+  return validateInPackage(xml, pkg.library, isMultiDocument(pkg), pkg.standalone)
 }
 
 export function info(pkg: GuiPackage): GuiInfo {
@@ -209,7 +215,7 @@ export class InvalidMarkupError extends Error {
  */
 export function setMarkup(pkg: GuiPackage, xml: string): GuiPackage {
   // In a package with a library, the primary resolves names against it too.
-  const result = validateInPackage(xml, pkg.library, isMultiDocument(pkg))
+  const result = validateInPackage(xml, pkg.library, isMultiDocument(pkg), pkg.standalone)
   if (!result.valid) throw new InvalidMarkupError(result.errors)
   return { ...pkg, xml }
 }
@@ -220,7 +226,10 @@ export function setMarkup(pkg: GuiPackage, xml: string): GuiPackage {
  */
 export function setDocument(pkg: GuiPackage, name: string, xml: string): GuiPackage {
   if (name === LIBRARY_NAME) throw new Error(`${LIBRARY_NAME} is the library, not a document; use setLibrary`)
-  const base = pkg.documents && pkg.primary ? pkg : { ...pkg, documents: { [GUIX_NAME]: pkg.xml }, primary: GUIX_NAME }
+  // A second screen is the other promotion trigger: it needs a package.
+  const base: GuiPackage = pkg.documents && pkg.primary
+    ? pkg
+    : { ...pkg, standalone: undefined, documents: { [GUIX_NAME]: pkg.xml }, primary: GUIX_NAME }
   const next: GuiPackage = { ...base, documents: { ...base.documents, [name]: xml } }
   if (name === base.primary) next.xml = xml
   const result = validateInPackage(xml, next.library, isMultiDocument(next))
@@ -237,7 +246,9 @@ export function setLibrary(pkg: GuiPackage, xml: string): GuiPackage {
 }
 
 export function addAsset(pkg: GuiPackage, name: string, bytes: Uint8Array): GuiPackage {
-  return { ...pkg, assets: { ...pkg.assets, [assetKey(name)]: bytes } }
+  // A local asset is one of the two triggers that promote a standalone
+  // document to a package (RFC-0043).
+  return { ...pkg, standalone: undefined, assets: { ...pkg.assets, [assetKey(name)]: bytes } }
 }
 
 export function removeAsset(pkg: GuiPackage, name: string): GuiPackage {

@@ -141,6 +141,20 @@ neither place is reported by the ordinary checks (`UNRESOLVED_TOKEN`, …).
 
 `flatten` inlines the whole library part, not only the names a document uses.
 
+## Standalone documents
+
+Bare markup (not a ZIP) unpacks as a **standalone document** (`pkg.standalone`,
+[RFC-0043](https://github.com/dotgui/core/blob/main/rfcs/0043-standalone-guix.md)):
+the served, readable form. Its asset references must be absolute URLs —
+`validateDocument` reports a local path as `LOCAL_ASSET_IN_STANDALONE`. Adding a
+local asset (`addAsset`) or a second screen (`setDocument`) promotes it to a
+package, the two triggers the RFC names.
+
+Everywhere, from 0.3, an asset reference is never a `data:` URI (`DATA_URI`).
+Both rules are errors in a document declaring 0.3 or higher and warnings in one
+written before them. `validate(xml, { standalone: true })` applies them to bare
+markup directly.
+
 ## Use cases
 
 - **The CLI** — `read` / `info` / `add` / `rm` / `set-preview` / `pack` / `unpack`
