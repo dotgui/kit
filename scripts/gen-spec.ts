@@ -13,7 +13,7 @@ import ts from 'typescript'
 import { writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
-import { specContent, specCategoryOrder, type ContentEntry } from '../../core/schema/spec.content.ts'
+import { specContent, specCategoryOrder, specFormatVersion, type ContentEntry } from '../../core/schema/spec.content.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const typesPath = resolve(here, '../../core/schema/types.ts')
@@ -140,7 +140,7 @@ function buildElement(entry: ContentEntry) {
 
 const spec = {
   $generated: 'DO NOT EDIT — run `bun run gen:spec` in the kit. Source: core/schema/types.ts + spec.content.ts',
-  formatVersion: '0.2',
+  formatVersion: specFormatVersion,
   categoryOrder: specCategoryOrder,
   sharedAttributes,
   elements: specContent.map(buildElement)
