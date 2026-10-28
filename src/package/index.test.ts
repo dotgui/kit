@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate'
 import {
-  unpack, pack, flatten, validateDocument, listDocuments, getDocument,
+  unpack, pack, flatten, validateDocument, listDocuments, getDocument, fromEntries, toEntries, PackageEntryError,
   isMultiDocument, setMarkup, setDocument, setLibrary, addAsset, info, InvalidMarkupError,
 } from './index'
 
@@ -205,5 +205,52 @@ describe('component ids across documents (RFC-0046)', () => {
     const r = validateDocument(old, '01-a.guix')
     expect(r.valid).toBe(true)
     expect(r.warnings.map((w) => w.code)).toContain('DUPLICATE_COMPONENT_ID')
+  })
+})
+
+describe('folder-form packages (RFC-0054)', () => {
+  const files: Record<string, string> = {
+    '01-welcome.guix': '<gui version="0.4.1"><col w="390" /></gui>',
+    'library.guix': '<gui version="0.4.1"><tokens><color name="primary" value="#007AFF" /></tokens></gui>',
+    'preview.webp': 'webp',
+    'assets/logo.svg': '<svg />',
+  }
+  const asEntries = (f: Record<string, string>) => Object.fromEntries(Object.entries(f).map(([k, v]) => [k, strToU8(v)]))
+
+  test('a ZIP and the directory it unzips to are the same package', () => {
+    const fromDir = fromEntries(asEntries(files))
+    const fromZip = unpack(zip(files))
+    expect(fromDir.documents).toEqual(fromZip.documents)
+    expect(fromDir.library).toBe(fromZip.library)
+    expect(fromDir.assets).toEqual(fromZip.assets)
+    expect(fromDir.preview).toEqual(fromZip.preview)
+  })
+
+  test('toEntries round-trips byte for byte, in lexical order', () => {
+    const entries = toEntries(fromEntries(asEntries(files)))
+    expect(Object.keys(entries)).toEqual(Object.keys(files).sort())
+    for (const [k, v] of Object.entries(files)) expect(strFromU8(entries[k])).toBe(v)
+    // Two zips of one package are identical.
+    expect(pack(fromEntries(asEntries(files)))).toEqual(pack(fromEntries(asEntries(files))))
+  })
+
+  test('litter is ignored, listed, warned about, and never written back', () => {
+    const pkg = fromEntries(asEntries({ ...files, '.DS_Store': 'x', '.git/config': 'x', 'assets/.hidden.png': 'x', 'notes.txt': 'x', 'nested/02.guix': '<gui />' }))
+    expect(pkg.ignored).toEqual(['.DS_Store', '.git/config', 'assets/.hidden.png', 'nested/02.guix', 'notes.txt'])
+    expect(info(pkg).ignored).toHaveLength(5)
+    expect(validateDocument(pkg).warnings.filter((w) => w.code === 'IGNORED_ENTRY')).toHaveLength(5)
+    expect(Object.keys(toEntries(pkg))).toEqual(Object.keys(files).sort())
+  })
+
+  test('paths that leave the package, and case or NFC collisions, are refused', () => {
+    for (const bad of ['../outside.svg', '/abs.svg', 'assets/../../x.svg', 'C:/x.svg']) {
+      expect(() => fromEntries(asEntries({ ...files, [bad]: 'x' }))).toThrow(PackageEntryError)
+    }
+    expect(() => fromEntries(asEntries({ ...files, 'assets/Logo.svg': 'x' }))).toThrow(/differ only in case/)
+    const composed = 'assets/caf\u00e9.svg'
+    const decomposed = 'assets/cafe\u0301.svg'
+    expect(() => fromEntries(asEntries({ ...files, [composed]: 'x', [decomposed]: 'y' }))).toThrow(PackageEntryError)
+    // A decomposed name alone is written back composed.
+    expect(Object.keys(toEntries(fromEntries(asEntries({ ...files, [decomposed]: 'y' }))))).toContain(composed)
   })
 })

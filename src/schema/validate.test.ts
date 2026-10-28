@@ -146,7 +146,7 @@ describe('version gate (spec points)', () => {
     const r = at(next)
     expect(r.valid).toBe(false)
     expect(r.errors.map((e) => e.message).join('\n')).toContain(`reads documents up to version ${SUPPORTED_VERSION}`)
-    expect(gateCodes('0.4')).toHaveLength(1)
+    expect(gateCodes(`${major}.${minor + 1}`)).toHaveLength(1)
     // No spec has been 1.0; a file that says so is mislabelled by its producer.
     expect(gateCodes('1.0')).toHaveLength(1)
   })
