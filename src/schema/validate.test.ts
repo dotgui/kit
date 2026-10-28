@@ -300,3 +300,47 @@ describe('identity (RFC-0046)', () => {
     expect(validate('<gui version="0.3.7"><col w="10" /></gui>').errors).toEqual([])
   })
 })
+
+describe('detached-from (RFC-0035)', () => {
+  const codes = (r: ReturnType<typeof validate>) => r.errors.map((e) => e.code)
+  const doc = (body: string, v = '0.3.8') => `<gui version="${v}">
+  <components>
+    <component id="comp-heading"><col><text value="Heading" /></col></component>
+    <component-set id="compset-tab-item">
+      <variant id="comp-tab-item"><row><text value="Tab" /></row></variant>
+      <variant id="comp-tab-item-active"><row><text value="Tab" /></row></variant>
+    </component-set>
+    <component id="comp-other"><row /></component>
+    <component id="comp-tabbar"><col><row slot="tabs" slot-accept="compset-tab-item" /></col></component>
+  </components>
+  <col w="390">${body}</col>
+</gui>`
+
+  test('an origin naming a declared component or variant validates', () => {
+    expect(validate(doc('<col detached-from="comp-heading"><text value="SEO" /></col>')).errors).toEqual([])
+    expect(validate(doc('<row detached-from="comp-tab-item-active" />')).errors).toEqual([])
+  })
+
+  test('an origin that resolves nowhere is an error from 0.3.8', () => {
+    expect(codes(validate(doc('<col detached-from="comp-missing" />')))).toContain('UNRESOLVED_DETACHED_FROM')
+    // A set is not what a frame is detached from.
+    expect(codes(validate(doc('<col detached-from="compset-tab-item" />')))).toContain('UNRESOLVED_DETACHED_FROM')
+    const before = validate(doc('<col detached-from="comp-missing" />', '0.3.7'))
+    expect(before.valid).toBe(true)
+    expect(before.warnings.map((w) => w.code)).toContain('UNRESOLVED_DETACHED_FROM')
+  })
+
+  test('only layout containers carry it, and only instances carry component', () => {
+    expect(codes(validate(doc('<instance component="comp-heading" detached-from="comp-heading" />')))).toContain('DETACHED_FROM_MISPLACED')
+    expect(codes(validate(doc('<text value="x" detached-from="comp-heading" />')))).toContain('DETACHED_FROM_MISPLACED')
+    expect(codes(validate(doc('<col component="comp-heading" />')))).toContain('COMPONENT_ON_NON_INSTANCE')
+    expect(codes(validate(doc('<col component="comp-heading" />', '0.3.7')))).not.toContain('COMPONENT_ON_NON_INSTANCE')
+  })
+
+  test('slot-accept takes a container detached from an accepted component', () => {
+    const fill = (child: string) => doc(`<instance component="comp-tabbar"><slot name="tabs">${child}</slot></instance>`)
+    expect(validate(fill('<row detached-from="comp-tab-item-active"><text value="Hot" /></row>')).errors).toEqual([])
+    expect(codes(validate(fill('<row detached-from="comp-other" />')))).toContain('SLOT_ACCEPT')
+    expect(codes(validate(fill('<row />')))).toContain('SLOT_ACCEPT')
+  })
+})
