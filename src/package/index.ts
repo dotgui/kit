@@ -24,9 +24,9 @@
  */
 import { unzipSync, zipSync, strToU8, strFromU8 } from 'fflate'
 import { validate, type ValidationError, type ValidationResult } from '../schema/validate'
-import { LIBRARY_NAME, checkComponentIdsAcross, flattenWith, validateInPackage } from './library'
+import { LIBRARY_DIRECTORY, LIBRARY_NAME, checkComponentIdsAcross, flattenWith, joinLibraryFiles, libraryErrors, validateInPackage } from './library'
 
-export { LIBRARY_NAME } from './library'
+export { LIBRARY_DIRECTORY, LIBRARY_NAME } from './library'
 
 const GUIX_NAME = 'design.guix'
 const PREVIEW_NAME = 'preview.webp'
@@ -45,6 +45,11 @@ export interface GuiPackage {
   primary?: string
   /** `library.guix`, the package's shared declarations, if present. */
   library?: string
+  /**
+   * The library split across `library/` (RFC-0055): library files by package
+   * path, e.g. "library/components/button.guix". Never beside `library`.
+   */
+  libraryFiles?: Record<string, string>
   /**
    * Read from bare markup rather than a ZIP: a standalone document (RFC-0043),
    * whose asset references must be absolute URLs. Packing it promotes it to a
@@ -71,8 +76,10 @@ export interface GuiInfo {
   source?: string
   /** Document filenames in order; one entry for a single-document package. */
   documents: string[]
-  /** Whether the package carries a library.guix. */
+  /** Whether the package carries a library — library.guix or library/. */
   hasLibrary: boolean
+  /** The library files under library/, in path order (RFC-0055). */
+  libraryFiles: string[]
   /** Asset package paths. */
   assets: string[]
   /** Whether a preview.webp is present. */
@@ -115,9 +122,11 @@ export function unpack(bytes: Uint8Array): GuiPackage {
 }
 
 /** What an entry is to the package, or null when it is not part of it. */
-function entryKind(path: string): 'document' | 'library' | 'preview' | 'asset' | null {
+function entryKind(path: string): 'document' | 'library' | 'library-file' | 'preview' | 'asset' | null {
   // A dotfile is a tool's state, at any depth — never part of the package.
   if (path.split('/').some((segment) => segment.startsWith('.'))) return null
+  // Under library/, only .guix files are part of the package (RFC-0055).
+  if (path.startsWith(LIBRARY_DIRECTORY)) return path.endsWith('.guix') ? 'library-file' : null
   if (!path.includes('/')) {
     if (path === LIBRARY_NAME) return 'library'
     if (path.endsWith('.guix')) return 'document'
@@ -165,11 +174,15 @@ export function fromEntries(input: Record<string, Uint8Array>): GuiPackage {
   for (const path of paths) {
     const kind = entryKind(path)
     if (kind === 'library') pkg.library = strFromU8(entries[path])
+    else if (kind === 'library-file') (pkg.libraryFiles ??= {})[path] = strFromU8(entries[path])
     else if (kind === 'preview') pkg.preview = entries[path]
     else if (kind === 'asset') pkg.assets[path] = entries[path]
     else if (kind === null) ignored.push(path)
   }
   if (ignored.length) pkg.ignored = ignored
+  if (pkg.library !== undefined && pkg.libraryFiles) {
+    throw new PackageEntryError([LIBRARY_NAME, LIBRARY_DIRECTORY], `the package has both ${LIBRARY_NAME} and ${LIBRARY_DIRECTORY}; a library is stored one way or the other, never both`)
+  }
   return pkg
 }
 
@@ -189,6 +202,7 @@ export function toEntries(pkg: GuiPackage): Record<string, Uint8Array> {
     entries[GUIX_NAME] = strToU8(pkg.xml)
   }
   if (pkg.library !== undefined) entries[LIBRARY_NAME] = strToU8(pkg.library)
+  for (const [path, xml] of Object.entries(pkg.libraryFiles || {})) entries[path] = strToU8(xml)
   if (pkg.preview) entries[PREVIEW_NAME] = pkg.preview
   for (const [name, data] of Object.entries(pkg.assets)) entries[assetKey(name)] = data
   const ordered: Record<string, Uint8Array> = {}
@@ -232,13 +246,22 @@ export function getDocument(pkg: GuiPackage, name: string): string | undefined {
   return pkg.documents[name]
 }
 
+/**
+ * The package library as one markup string: library.guix, or the library
+ * files under library/ joined into one (RFC-0055).
+ */
 export function getLibrary(pkg: GuiPackage): string | undefined {
-  return pkg.library
+  return pkg.library ?? (pkg.libraryFiles ? joinLibraryFiles(pkg.libraryFiles) : undefined)
+}
+
+/** The library files under library/, in path order (RFC-0055). */
+export function listLibraryFiles(pkg: GuiPackage): string[] {
+  return Object.keys(pkg.libraryFiles || {}).sort()
 }
 
 /** True when the package holds several documents or a library. */
 export function isMultiDocument(pkg: GuiPackage): boolean {
-  return listDocuments(pkg).length > 1 || pkg.library !== undefined
+  return listDocuments(pkg).length > 1 || getLibrary(pkg) !== undefined
 }
 
 /**
@@ -250,7 +273,8 @@ export function isMultiDocument(pkg: GuiPackage): boolean {
 export function flatten(pkg: GuiPackage, name?: string): string {
   const xml = name === undefined ? pkg.xml : getDocument(pkg, name)
   if (xml === undefined) throw new Error(`no document named ${name} in the package`)
-  return pkg.library === undefined ? xml : flattenWith(pkg.library, xml)
+  const library = getLibrary(pkg)
+  return library === undefined ? xml : flattenWith(library, xml)
 }
 
 /**
@@ -260,16 +284,35 @@ export function flatten(pkg: GuiPackage, name?: string): string {
  * name that resolves nowhere is an error. Defaults to the primary document.
  */
 export function validateDocument(pkg: GuiPackage, name?: string): ValidationResult {
-  const xml = name === undefined ? pkg.xml : getDocument(pkg, name)
+  // A library file, by its path, validates against the rest of the library
+  // (RFC-0055): its names resolve across every other library file.
+  const libraryFile = name !== undefined && pkg.libraryFiles ? pkg.libraryFiles[name] : undefined
+  const xml = libraryFile ?? (name === undefined ? pkg.xml : getDocument(pkg, name))
   if (xml === undefined) throw new Error(`no document named ${name} in the package`)
-  const result = validateInPackage(xml, pkg.library, isMultiDocument(pkg), pkg.standalone)
+  let library = getLibrary(pkg)
+  if (libraryFile !== undefined) {
+    const rest = { ...pkg.libraryFiles }
+    delete rest[name!]
+    library = joinLibraryFiles(rest)
+  }
+  const result = libraryFile !== undefined
+    ? (() => {
+        const r = validateInPackage(xml, library, true, pkg.standalone)
+        // A library file may be declarations only.
+        const errors = r.errors.filter((e) => e.code !== 'NO_ROOT_NODE')
+        return { ...r, valid: errors.length === 0, errors }
+      })()
+    : validateInPackage(xml, library, isMultiDocument(pkg), pkg.standalone)
   const self = name ?? pkg.primary ?? GUIX_NAME
   const others = listDocuments(pkg)
     .filter((d) => d !== self)
     .map((d) => getDocument(pkg, d))
     .filter((x): x is string => x !== undefined)
   const across = checkComponentIdsAcross(xml, others)
-  const errors = [...result.errors, ...across.errors]
+  const documents: Record<string, string> = {}
+  for (const d of listDocuments(pkg)) { const x = getDocument(pkg, d); if (x !== undefined) documents[d] = x }
+  const split = pkg.libraryFiles ? libraryErrors(pkg.libraryFiles, documents) : []
+  const errors = [...result.errors, ...across.errors, ...split]
   // Ignoring is not hiding (RFC-0054): every ignored entry is named.
   const ignored = (pkg.ignored || []).map((path) => ({
     code: 'IGNORED_ENTRY',
@@ -287,7 +330,8 @@ export function info(pkg: GuiPackage): GuiInfo {
     platform: attr('platform'),
     source: attr('source'),
     documents: listDocuments(pkg),
-    hasLibrary: pkg.library !== undefined,
+    hasLibrary: getLibrary(pkg) !== undefined,
+    libraryFiles: listLibraryFiles(pkg),
     assets: listAssets(pkg),
     hasPreview: pkg.preview !== undefined,
     ignored: pkg.ignored || [],
@@ -310,7 +354,7 @@ export class InvalidMarkupError extends Error {
  */
 export function setMarkup(pkg: GuiPackage, xml: string): GuiPackage {
   // In a package with a library, the primary resolves names against it too.
-  const result = validateInPackage(xml, pkg.library, isMultiDocument(pkg), pkg.standalone)
+  const result = validateInPackage(xml, getLibrary(pkg), isMultiDocument(pkg), pkg.standalone)
   if (!result.valid) throw new InvalidMarkupError(result.errors)
   return { ...pkg, xml }
 }
@@ -327,17 +371,32 @@ export function setDocument(pkg: GuiPackage, name: string, xml: string): GuiPack
     : { ...pkg, standalone: undefined, documents: { [GUIX_NAME]: pkg.xml }, primary: GUIX_NAME }
   const next: GuiPackage = { ...base, documents: { ...base.documents, [name]: xml } }
   if (name === base.primary) next.xml = xml
-  const result = validateInPackage(xml, next.library, isMultiDocument(next))
+  const result = validateInPackage(xml, getLibrary(next), isMultiDocument(next))
   if (!result.valid) throw new InvalidMarkupError(result.errors)
   return next
 }
 
 /** Replace (or add) library.guix. Validated on its own: a library depends on nothing. */
 export function setLibrary(pkg: GuiPackage, xml: string): GuiPackage {
+  if (pkg.libraryFiles) throw new Error(`the library is split across ${LIBRARY_DIRECTORY}; use setLibraryFile`)
   // A library may be declarations only: no layout root is not an error here.
   const errors = validate(xml).errors.filter((e) => e.code !== 'NO_ROOT_NODE')
   if (errors.length > 0) throw new InvalidMarkupError(errors)
   return { ...pkg, library: xml }
+}
+
+/**
+ * Replace (or add) one library file under library/ (RFC-0055), validated
+ * against the rest of the library. A package with library.guix cannot take
+ * one: a library is stored one way or the other.
+ */
+export function setLibraryFile(pkg: GuiPackage, path: string, xml: string): GuiPackage {
+  if (!path.startsWith(LIBRARY_DIRECTORY) || !path.endsWith('.guix')) throw new Error(`a library file is a .guix under ${LIBRARY_DIRECTORY}, got ${path}`)
+  if (pkg.library !== undefined) throw new Error(`the package has ${LIBRARY_NAME}; a library is stored one way or the other, never both`)
+  const next: GuiPackage = { ...pkg, libraryFiles: { ...pkg.libraryFiles, [path]: xml } }
+  const result = validateDocument(next, path)
+  if (!result.valid) throw new InvalidMarkupError(result.errors)
+  return next
 }
 
 export function addAsset(pkg: GuiPackage, name: string, bytes: Uint8Array): GuiPackage {

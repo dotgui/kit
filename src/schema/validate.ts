@@ -1,6 +1,6 @@
 /**
  * dotgui-core — Validator
- * Reads documents up to spec 0.4.1 (see SUPPORTED_VERSION).
+ * Reads documents up to spec 0.4.2 (see SUPPORTED_VERSION).
  *
  * Validates a .guix markup string against the dotgui spec.
  * Goes beyond structural checks — resolves token refs, asset refs,
@@ -287,14 +287,14 @@ function isNumeric(value: string): boolean {
 // ---------------------------------------------------------------------------
 
 /**
- * The newest spec point this kit implements in full (spec 0.4.1: the whole
- * 0.3 chapter, and folder-form packages). Support is
+ * The newest spec point this kit implements in full (spec 0.4.2: the whole
+ * 0.3 chapter, folder-form packages, and the library directory). Support is
  * cumulative; a document declaring a later point is refused rather than
  * checked against rules this kit does not know. The kit's own version shares
  * the spec's chapter and counts its own patch.
  */
-export const SUPPORTED_VERSION = '0.4.1'
-const SUPPORTED: [number, number, number] = [0, 4, 1]
+export const SUPPORTED_VERSION = '0.4.2'
+const SUPPORTED: [number, number, number] = [0, 4, 2]
 
 /** RFC-0036's recommended platform values. Others are allowed, and warned on. */
 export const RECOMMENDED_PLATFORMS = new Set(['ios', 'android', 'web', 'desktop', 'tv', 'watch'])

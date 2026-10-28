@@ -171,6 +171,68 @@ function declaredNames(xml: string): { kind: string; name: string }[] {
   return names
 }
 
+/** Every name a library file shares, mode axes included, as `kind name` pairs. */
+function sharedNames(xml: string): { kind: string; name: string }[] {
+  const names = declaredNames(xml)
+  for (const block of parseTree(xml).children) {
+    if (LAYOUT_TAGS.has(block.tag)) break
+    if (block.tag === 'mode' && block.attrs.name) names.push({ kind: 'mode', name: block.attrs.name })
+    if (block.tag === 'modes') for (const m of block.children) if (m.attrs.name) names.push({ kind: 'mode', name: m.attrs.name })
+  }
+  return names
+}
+
+/** The directory a split library lives in (RFC-0055). */
+export const LIBRARY_DIRECTORY = 'library/'
+
+/** The first spec point a package with `library/` may declare (RFC-0055). */
+const LIBRARY_DIRECTORY_VERSION: [number, number, number] = [0, 4, 2]
+
+/**
+ * The one library a set of library files forms: each file's library part
+ * inlined in path order. A collision is an error (`libraryErrors`), so the
+ * order never changes the union.
+ */
+export function joinLibraryFiles(files: Record<string, string>): string | undefined {
+  const paths = Object.keys(files).sort()
+  if (paths.length === 0) return undefined
+  let joined = files[paths[0]]
+  for (const path of paths.slice(1)) joined = flattenWith(files[path], joined)
+  return joined
+}
+
+/**
+ * What is wrong with a split library as a whole (RFC-0055): a name declared
+ * by two library files, naming both; and a file in the package declaring a
+ * version before 0.4.2. `documents` are the package's documents, by name.
+ */
+export function libraryErrors(files: Record<string, string>, documents: Record<string, string>): ValidationError[] {
+  const errors: ValidationError[] = []
+  const owner = new Map<string, string>()
+  for (const path of Object.keys(files).sort()) {
+    let names: { kind: string; name: string }[]
+    try { names = sharedNames(files[path]) } catch { continue } // reported when the file is validated
+    for (const { kind, name } of names) {
+      const key = `${kind} ${name}`
+      const first = owner.get(key)
+      if (first !== undefined && first !== path) {
+        errors.push({ code: 'LIBRARY_COLLISION', message: `${kind} '${name}' is declared by ${first} and ${path}`, path: 'package' })
+      } else owner.set(key, path)
+    }
+  }
+  const all = { ...documents, ...files }
+  for (const name of Object.keys(all).sort()) {
+    let version: [number, number, number] | null = null
+    try { version = parseVersion(parseTree(all[name]).attrs.version || '') } catch { continue }
+    const [major, minor, patch] = LIBRARY_DIRECTORY_VERSION
+    const below = !version || version[0] < major || (version[0] === major && (version[1] < minor || (version[1] === minor && version[2] < patch)))
+    if (below) {
+      errors.push({ code: 'VERSION_BELOW_LIBRARY_DIRECTORY', message: `${name} declares version ${parseTree(all[name]).attrs.version ?? '(none)'}, but every file in a package with ${LIBRARY_DIRECTORY} must declare 0.4.2 or higher`, path: 'package' })
+    }
+  }
+  return errors
+}
+
 /** Component, component-set and variant ids a document declares. */
 function componentIds(xml: string): string[] {
   const ids: string[] = []
