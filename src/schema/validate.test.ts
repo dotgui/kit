@@ -462,3 +462,40 @@ describe('clipping and masks (RFC-0028)', () => {
     expect(warns(before)).toContain('OBSOLETE_MASK')
   })
 })
+
+describe('descriptions (RFC-0057)', () => {
+  const codes = (r: ReturnType<typeof validate>) => r.errors.map((e) => e.code)
+  const warns = (r: ReturnType<typeof validate>) => r.warnings.map((w) => w.code)
+  const d = 'description="Primary action. One per screen."'
+  const full = (v = '0.4.3') => `<gui version="${v}">
+  <tokens><color name="primary" value="#3B5BFD" ${d} /><number name="r" value="8" ${d} /><string name="s" value="x" ${d} /></tokens>
+  <styles><text-style name="H1" font-size="32" ${d} /><fill-style name="Brand" value="#3B5BFD" ${d} /><effect-style name="E1" ${d}><effect type="drop-shadow" /></effect-style></styles>
+  <components>
+    <component id="comp-a" ${d}><row /></component>
+    <component-set id="compset-b" ${d}><variant id="comp-b" ${d}><row /></variant></component-set>
+  </components>
+  <col w="390"><instance component="comp-a" description="a prop value, not the property" /></col>
+</gui>`
+
+  test('description is valid on every library item, and an instance prop named description is a prop', () => {
+    const r = validate(full())
+    expect(r.errors).toEqual([])
+    expect(warns(r)).not.toContain('DESCRIPTION_MISPLACED')
+  })
+
+  test('anywhere else is an error from 0.4.3, a warning before', () => {
+    expect(codes(validate(`<gui version="0.4.3"><col w="10" ${d} /></gui>`))).toContain('DESCRIPTION_MISPLACED')
+    expect(codes(validate(`<gui version="0.4.3" ${d}><col w="10" /></gui>`))).toContain('DESCRIPTION_MISPLACED')
+    const before = validate(`<gui version="0.4.2"><col w="10" ${d} /></gui>`)
+    expect(before.valid).toBe(true)
+    expect(warns(before)).toContain('DESCRIPTION_MISPLACED')
+  })
+
+  test('an empty description warns', () => {
+    expect(warns(validate('<gui version="0.4.3"><tokens><color name="a" value="#000000" description="" /></tokens><col w="10" /></gui>'))).toContain('DESCRIPTION_EMPTY')
+  })
+
+  test('template on a document root validates', () => {
+    expect(validate('<gui version="0.4.3" name="Settings — template" template><col w="10" /></gui>').errors).toEqual([])
+  })
+})

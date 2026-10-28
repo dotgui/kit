@@ -308,3 +308,15 @@ describe('the library directory (RFC-0055)', () => {
     expect(() => setLibrary(pkg, '<gui version="0.4.2"><tokens /></gui>')).toThrow()
   })
 })
+
+describe('templates in a package (RFC-0057)', () => {
+  test('info lists templates; template on the library is an error', () => {
+    const pkg = unpack(zip({
+      '01-home.guix': '<gui version="0.4.3"><col w="390" /></gui>',
+      '02-settings.guix': '<gui version="0.4.3" name="Settings — template" template><col w="390" /></gui>',
+      'library.guix': '<gui version="0.4.3" template><tokens /></gui>',
+    }))
+    expect(info(pkg).templates).toEqual(['02-settings.guix'])
+    expect(validateDocument(pkg).errors.map((e) => e.code)).toContain('TEMPLATE_IN_LIBRARY')
+  })
+})

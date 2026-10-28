@@ -80,6 +80,8 @@ export interface GuiInfo {
   hasLibrary: boolean
   /** The library files under library/, in path order (RFC-0055). */
   libraryFiles: string[]
+  /** Documents marked `<gui template>`: starting points to copy (RFC-0057). */
+  templates: string[]
   /** Asset package paths. */
   assets: string[]
   /** Whether a preview.webp is present. */
@@ -254,6 +256,23 @@ export function getLibrary(pkg: GuiPackage): string | undefined {
   return pkg.library ?? (pkg.libraryFiles ? joinLibraryFiles(pkg.libraryFiles) : undefined)
 }
 
+/** Whether a document's root says `template` (RFC-0057). */
+function isTemplate(xml: string | undefined): boolean {
+  const open = xml ? xml.match(/<gui\b[^>]*>/i) : null
+  return !!open && /\stemplate(\s|=|\/?>|$)/i.test(open[0])
+}
+
+/** `template` on the library: its declarations are no starting point (RFC-0057). */
+function templateErrors(pkg: GuiPackage): ValidationError[] {
+  const files: Record<string, string> = { ...pkg.libraryFiles }
+  if (pkg.library !== undefined) files[LIBRARY_NAME] = pkg.library
+  return Object.keys(files).sort().filter((name) => isTemplate(files[name])).map((name) => ({
+    code: 'TEMPLATE_IN_LIBRARY',
+    message: `${name} is marked template, but the library is declarations, not a starting point to copy`,
+    path: 'package',
+  }))
+}
+
 /** The library files under library/, in path order (RFC-0055). */
 export function listLibraryFiles(pkg: GuiPackage): string[] {
   return Object.keys(pkg.libraryFiles || {}).sort()
@@ -312,7 +331,7 @@ export function validateDocument(pkg: GuiPackage, name?: string): ValidationResu
   const documents: Record<string, string> = {}
   for (const d of listDocuments(pkg)) { const x = getDocument(pkg, d); if (x !== undefined) documents[d] = x }
   const split = pkg.libraryFiles ? libraryErrors(pkg.libraryFiles, documents) : []
-  const errors = [...result.errors, ...across.errors, ...split]
+  const errors = [...result.errors, ...across.errors, ...split, ...templateErrors(pkg)]
   // Ignoring is not hiding (RFC-0054): every ignored entry is named.
   const ignored = (pkg.ignored || []).map((path) => ({
     code: 'IGNORED_ENTRY',
@@ -332,6 +351,7 @@ export function info(pkg: GuiPackage): GuiInfo {
     documents: listDocuments(pkg),
     hasLibrary: getLibrary(pkg) !== undefined,
     libraryFiles: listLibraryFiles(pkg),
+    templates: listDocuments(pkg).filter((d) => isTemplate(getDocument(pkg, d))),
     assets: listAssets(pkg),
     hasPreview: pkg.preview !== undefined,
     ignored: pkg.ignored || [],

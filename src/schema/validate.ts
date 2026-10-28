@@ -1,6 +1,6 @@
 /**
  * dotgui-core — Validator
- * Reads documents up to spec 0.4.2 (see SUPPORTED_VERSION).
+ * Reads documents up to spec 0.4.3 (see SUPPORTED_VERSION).
  *
  * Validates a .guix markup string against the dotgui spec.
  * Goes beyond structural checks — resolves token refs, asset refs,
@@ -288,13 +288,14 @@ function isNumeric(value: string): boolean {
 
 /**
  * The newest spec point this kit implements in full (spec 0.4.2: the whole
- * 0.3 chapter, folder-form packages, and the library directory). Support is
+ * 0.3 chapter, folder-form packages, the library directory, and
+ * descriptions). Support is
  * cumulative; a document declaring a later point is refused rather than
  * checked against rules this kit does not know. The kit's own version shares
  * the spec's chapter and counts its own patch.
  */
-export const SUPPORTED_VERSION = '0.4.2'
-const SUPPORTED: [number, number, number] = [0, 4, 2]
+export const SUPPORTED_VERSION = '0.4.3'
+const SUPPORTED: [number, number, number] = [0, 4, 3]
 
 /** RFC-0036's recommended platform values. Others are allowed, and warned on. */
 export const RECOMMENDED_PLATFORMS = new Set(['ios', 'android', 'web', 'desktop', 'tv', 'watch'])
@@ -879,6 +880,10 @@ export function validate(guiXml: string, options: ValidateOptions = {}): Validat
   // warnings before.
   checkMasks(root, parsedVersion && compareVersions(parsedVersion, [0, 3, 11]) >= 0 ? err : warn)
 
+  // Descriptions (RFC-0057). A 0.4.3 rule — an error from 0.4.3, a warning
+  // before; an empty description only ever warns.
+  checkDescriptions(root, parsedVersion && compareVersions(parsedVersion, [0, 4, 3]) >= 0 ? err : warn, warn)
+
   // Identity (RFC-0046): ids, prop target paths, and source-id. These are
   // 0.3.7 rules — errors from 0.3.7, warnings in a document written before.
   const identity = parsedVersion && compareVersions(parsedVersion, [0, 3, 7]) >= 0 ? err : warn
@@ -1320,4 +1325,36 @@ function checkMasks(root: El, report: Report) {
   root.children.forEach((child, i) => {
     if (child.tag !== 'tokens' && child.tag !== 'styles') visit(child, `gui > ${child.tag}[${i}]`)
   })
+}
+
+// ---------------------------------------------------------------------------
+// Descriptions (RFC-0057)
+// ---------------------------------------------------------------------------
+
+/** The library items a reader picks from — the only places `description` goes. */
+const DESCRIBABLE = new Set([
+  'component', 'component-set', 'variant',
+  'color', 'number', 'string',
+  'text-style', 'fill-style', 'effect-style',
+])
+
+/**
+ * `description` sits on library items only, and says something. An
+ * `<instance>`'s attributes are prop values, so a prop named `description`
+ * is never this property.
+ */
+function checkDescriptions(root: El, report: Report, advise: Report) {
+  function visit(el: El, at: string) {
+    const description = el.attrs.description
+    if (description !== undefined && el.tag !== 'instance') {
+      if (!DESCRIBABLE.has(el.tag)) {
+        report('DESCRIPTION_MISPLACED', `<${el.tag}> cannot carry description; only components, component sets, variants, tokens and styles can`, at)
+      } else if (!description.trim()) {
+        advise('DESCRIPTION_EMPTY', `<${el.tag}> has an empty description, which says nothing; describe it or leave the attribute out`, at)
+      }
+    }
+    el.children.forEach((child, i) => visit(child, `${at} > ${child.tag}[${i}]`))
+  }
+  if (root.attrs.description !== undefined) report('DESCRIPTION_MISPLACED', '<gui> cannot carry description; a document is described by its name', 'gui')
+  root.children.forEach((child, i) => visit(child, `gui > ${child.tag}[${i}]`))
 }
