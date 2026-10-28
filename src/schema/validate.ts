@@ -1,6 +1,6 @@
 /**
  * dotgui-core — Validator
- * Reads documents up to spec 0.3.9 (see SUPPORTED_VERSION).
+ * Reads documents up to spec 0.3.10 (see SUPPORTED_VERSION).
  *
  * Validates a .guix markup string against the dotgui spec.
  * Goes beyond structural checks — resolves token refs, asset refs,
@@ -291,8 +291,8 @@ function isNumeric(value: string): boolean {
  * checked against rules this kit does not know. The kit's own version shares
  * the spec's chapter and counts its own patch.
  */
-export const SUPPORTED_VERSION = '0.3.9'
-const SUPPORTED: [number, number, number] = [0, 3, 9]
+export const SUPPORTED_VERSION = '0.3.10'
+const SUPPORTED: [number, number, number] = [0, 3, 10]
 
 /** RFC-0036's recommended platform values. Others are allowed, and warned on. */
 export const RECOMMENDED_PLATFORMS = new Set(['ios', 'android', 'web', 'desktop', 'tv', 'watch'])
@@ -724,7 +724,8 @@ export function validate(guiXml: string, options: ValidateOptions = {}): Validat
             if (child.attrs.type && !EFFECT_TYPES.has(child.attrs.type)) {
               err('INVALID_EFFECT_TYPE', `<effect> type must be drop-shadow|inner-shadow|layer-blur|background-blur|glass, got "${child.attrs.type}"`, childPath)
             }
-          } else {
+          } else if (child.tag !== 'border' && child.tag !== 'stroke') {
+            // <border> is RFC-0025's entry; <stroke> is reported as obsolete.
             warn('UNKNOWN_TAG', `Unknown element inside <appearance>: <${child.tag}>`, childPath)
           }
         }
@@ -789,6 +790,9 @@ export function validate(guiXml: string, options: ValidateOptions = {}): Validat
       }
       if ((type === 'number' || type === 'style') && !p.attrs.bind) {
         violation('PROP_NO_BIND', `<prop name="${p.attrs.name}" type="${type}"> needs bind: a ${type} could mean several attributes`, pPath)
+      }
+      if (type === 'color' && p.attrs.bind === 'stroke') {
+        warn('LEGACY_PROP_BIND', `<prop bind="stroke"> is the old name; use bind="border-color"`, pPath)
       }
       if (type === 'style' && p.attrs.bind && !STYLE_BINDS.has(p.attrs.bind)) {
         violation('INVALID_PROP_BIND', `<prop type="style"> bind must be one of ${[...STYLE_BINDS].join(', ')}, got "${p.attrs.bind}"`, pPath)
@@ -864,6 +868,10 @@ export function validate(guiXml: string, options: ValidateOptions = {}): Validat
   // Colors and dimensions (RFC-0033). 0.3.9 rules — errors from 0.3.9,
   // warnings before.
   checkUnits(root, parsedVersion && compareVersions(parsedVersion, [0, 3, 9]) >= 0 ? err : warn, warn)
+
+  // fill colors text, border outlines (RFC-0022). 0.3.10 rules — errors from
+  // 0.3.10, warnings before.
+  checkFillAndBorder(root, parsedVersion && compareVersions(parsedVersion, [0, 3, 10]) >= 0 ? err : warn)
 
   // Identity (RFC-0046): ids, prop target paths, and source-id. These are
   // 0.3.7 rules — errors from 0.3.7, warnings in a document written before.
@@ -1229,4 +1237,36 @@ function checkUnits(root: El, report: Report, advise: Report) {
     el.children.forEach((child, i) => visit(child, `${at} > ${child.tag}[${i}]`))
   }
   root.children.forEach((child, i) => visit(child, `gui > ${child.tag}[${i}]`))
+}
+
+// ---------------------------------------------------------------------------
+// fill and border (RFC-0022)
+// ---------------------------------------------------------------------------
+
+const STROKE_ATTRS = ['stroke', 'stroke-width', 'stroke-position']
+
+/**
+ * `fill` colors text and segments, not `color`; outlines are `border`, not
+ * SVG's `stroke` attributes or a `<stroke>` entry; and `<border>` lives inside
+ * `<appearance>`, never directly in a node.
+ */
+function checkFillAndBorder(root: El, report: Report) {
+  function visit(el: El, parent: string, at: string) {
+    if ((el.tag === 'text' || el.tag === 'segment') && el.attrs.color !== undefined) {
+      report('OBSOLETE_TEXT_COLOR', `<${el.tag} color="${el.attrs.color}">: write fill="${el.attrs.color}" — fill colors text`, at)
+    }
+    if (parent === 'appearance' && el.tag === 'stroke') {
+      report('OBSOLETE_STROKE', '<stroke> is not an <appearance> entry; write <border>', at)
+    } else if (parent !== 'appearance' && !['border', 'effect', 'fill', 'instance', 'prop'].includes(el.tag)) {
+      const used = STROKE_ATTRS.filter((a) => el.attrs[a] !== undefined)
+      if (used.length) report('OBSOLETE_STROKE', `<${el.tag}> ${used.join(', ')}: write border="{width} {color} {position}" instead`, at)
+    }
+    if (el.tag === 'border' && parent !== 'appearance' && CHILD_TAGS.has(parent)) {
+      report('BORDER_MISPLACED', `<border> belongs inside <appearance>, not directly in <${parent}>`, at)
+    }
+    el.children.forEach((child, i) => visit(child, el.tag, `${at} > ${child.tag}[${i}]`))
+  }
+  root.children.forEach((child, i) => {
+    if (child.tag !== 'tokens' && child.tag !== 'styles') visit(child, 'gui', `gui > ${child.tag}[${i}]`)
+  })
 }

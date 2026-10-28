@@ -385,3 +385,45 @@ describe('colors and dimensions (RFC-0033)', () => {
     expect(warns(before)).toContain('INVALID_DIMENSION')
   })
 })
+
+describe('fill and border (RFC-0022)', () => {
+  const codes = (r: ReturnType<typeof validate>) => r.errors.map((e) => e.code)
+  const warns = (r: ReturnType<typeof validate>) => r.warnings.map((w) => w.code)
+  const at = (node: string, v = '0.3.10') => validate(`<gui version="${v}"><col w="390">${node}</col></gui>`)
+
+  test('fill colors text and segments; color is obsolete from 0.3.10', () => {
+    expect(at('<text value="a" fill="#111111" />').errors).toEqual([])
+    expect(at('<text><segment value="a" fill="#111111" /></text>').errors).toEqual([])
+    expect(codes(at('<text value="a" color="#111111" />'))).toContain('OBSOLETE_TEXT_COLOR')
+    expect(codes(at('<text><segment value="a" color="#111111" /></text>'))).toContain('OBSOLETE_TEXT_COLOR')
+    const before = at('<text value="a" color="#111111" />', '0.3.9')
+    expect(before.valid).toBe(true)
+    expect(warns(before)).toContain('OBSOLETE_TEXT_COLOR')
+  })
+
+  test('stroke attributes and <stroke> are obsolete; border is the outline', () => {
+    expect(at('<col w="10" border="1 $line inside" />').errors.map((e) => e.code)).not.toContain('OBSOLETE_STROKE')
+    expect(codes(at('<col w="10" stroke="#000000" stroke-width="2" />'))).toContain('OBSOLETE_STROKE')
+    expect(codes(at('<col w="10"><appearance><stroke color="#000000" /></appearance></col>'))).toContain('OBSOLETE_STROKE')
+    expect(warns(at('<col w="10" stroke="#000000" stroke-width="2" />', '0.3.9'))).toContain('OBSOLETE_STROKE')
+  })
+
+  test('<border> belongs inside <appearance>', () => {
+    const inside = at('<col w="10"><appearance><border color="#000000" w="1" /></appearance></col>')
+    expect(inside.errors).toEqual([])
+    expect(warns(inside)).not.toContain('UNKNOWN_TAG')
+    expect(codes(at('<col w="10"><border color="#000000" w="1" /></col>'))).toContain('BORDER_MISPLACED')
+  })
+
+  test('bind="stroke" is the old name for border-color', () => {
+    const r = validate(`<gui version="0.3.10">
+  <components><component id="comp-a">
+    <props><prop name="edge" type="color" target="box" bind="stroke" /></props>
+    <col id="box" w="10" border="1 #000000" />
+  </component></components>
+  <col w="10" />
+</gui>`)
+    expect(r.errors).toEqual([])
+    expect(warns(r)).toContain('LEGACY_PROP_BIND')
+  })
+})

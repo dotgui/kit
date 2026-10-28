@@ -75,3 +75,30 @@ describe('detached-from in the HTML renderer (RFC-0035)', () => {
     expect(strip(renderToHTML(doc('detached-from="comp-heading"')))).toBe(strip(renderToHTML(doc(''))))
   })
 })
+
+describe('fill and border in the HTML renderer (RFC-0022)', () => {
+  const doc = (props: string, instance: string) => `<gui version="0.3.10">
+  <components><component id="comp-a">
+    <props>${props}</props>
+    <col id="box" w="40" h="40" border="2 #000000" />
+  </component></components>
+  <col w="400">${instance}</col>
+</gui>`
+
+  test('a color prop bound to border-color, or its old name stroke, recolors the border', () => {
+    for (const bind of ['border-color', 'stroke']) {
+      const html = renderToHTML(doc(`<prop name="edge" type="color" target="box" bind="${bind}" />`, '<instance component="comp-a" edge="#FF0000" />')).toLowerCase()
+      expect(html).toMatch(/#ff0000|rgb\(255, 0, 0\)/)
+    }
+  })
+
+  test('border longhands override the shorthand', () => {
+    const html = renderToHTML('<gui version="0.3.10"><col w="400"><col w="40" h="40" border="2 #000000" border-color="#00FF00" /></col></gui>').toLowerCase()
+    expect(html).toMatch(/#00ff00|rgb\(0, 255, 0\)/)
+  })
+
+  test('a border color with spaces stays one color', () => {
+    const html = renderToHTML('<gui version="0.3.10"><col w="400"><col w="40" h="40" border="1 rgba(255, 0, 0, 0.5)" /></col></gui>').toLowerCase()
+    expect(html).toMatch(/rgba\(255, ?0, ?0, ?0\.5\)/)
+  })
+})

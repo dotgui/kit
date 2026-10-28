@@ -753,8 +753,9 @@ function parseBorder(val: string): { color: string; width: number; style: string
   const ALIGN = new Set(['inside', 'outside', 'center'])
   const STYLE = new Set(['solid', 'dashed', 'dotted'])
   let color = '', width = 1, style = 'solid', align = 'center'
-  for (const tok of val.trim().split(/\s+/)) {
-    if (tok.startsWith('#') || tok.startsWith('$') || /^rgba?/.test(tok)) color = tok
+  // Split outside parentheses, so rgba(0, 0, 0, 0.2) stays one token.
+  for (const tok of val.trim().match(/(?:[^\s(]+|\([^)]*\))+/g) || []) {
+    if (tok.startsWith('#') || tok.startsWith('$') || /^(rgba?|oklch)\(/.test(tok)) color = tok
     else if (ALIGN.has(tok)) align = tok
     else if (STYLE.has(tok)) style = tok
     else if (/^\d/.test(tok)) width = parseFloat(tok)
@@ -809,15 +810,21 @@ function strokeStyle(el: HTMLElement, guiEl: Element, radius?: string | null): H
   const borderVal = get(guiEl, 'border')
   let color: string, width: number, align: string, style: string
 
-  if (borderVal) {
-    const parsed = parseBorder(borderVal)
-    if (!parsed) return null
-    color = parsed.color
-    width = parsed.width
-    align = parsed.align
-    style = parsed.style
+  // The shorthand sets every part and each longhand replaces one (RFC-0025),
+  // as in the native renderer.
+  const longColor = get(guiEl, 'border-color')
+  const longWidth = get(guiEl, 'border-width')
+  const longStyle = get(guiEl, 'border-style')
+  const longAlign = get(guiEl, 'border-align')
+  const parsed = borderVal ? parseBorder(borderVal) : null
+  if (parsed || longColor || longWidth || longStyle || longAlign) {
+    color = longColor || (parsed ? parsed.color : '')
+    width = longWidth ? parseFloat(longWidth) : parsed ? parsed.width : 1
+    align = longAlign || (parsed ? parsed.align : 'center')
+    style = longStyle || (parsed ? parsed.style : 'solid')
+    if (!color) return null
   } else {
-    // Legacy fallback for files using stroke= / stroke-width=
+    // Before 0.3.10, stroke / stroke-width / stroke-position meant a border (RFC-0022).
     const s = get(guiEl, 'stroke')
     const sw = get(guiEl, 'stroke-width')
     if (!s || !sw) return null
@@ -2666,7 +2673,7 @@ function applyPropsToBody(body: Element, instance: Element, compEl: Element): vo
     { suffix: '-text',         type: 'style',   bind: 'text-style'   },
     { suffix: '-fill',         type: 'style',   bind: 'fill-style'   },
     { suffix: '-effect',       type: 'style',   bind: 'effect-style' },
-    { suffix: '-stroke',       type: 'color',   bind: 'stroke'       },
+    { suffix: '-stroke',       type: 'color',   bind: 'border-color' },
     { suffix: '-radius',       type: 'number',  bind: 'radius'       },
     { suffix: '-opacity',      type: 'number',  bind: 'opacity'      },
   ]
@@ -2721,8 +2728,9 @@ function applyOverride(targetEl: Element, type: string, value: string, bind?: st
   } else if ((type === 'boolean' || type === 'visible') && value === 'false') {
     targetEl.parentNode && targetEl.parentNode.removeChild(targetEl)
   } else if (type === 'color' || type === 'fill') {
-    // bind="stroke" overrides stroke color; default is fill
-    targetEl.setAttribute(bind || 'fill', value)
+    // Default is fill; bind="border-color" sets the outline, and "stroke" is
+    // its old name (RFC-0022).
+    targetEl.setAttribute(bind === 'stroke' ? 'border-color' : bind || 'fill', value)
   } else if (type === 'image' || type === 'src') {
     targetEl.setAttribute('src', value)
   } else if (type === 'component') {
