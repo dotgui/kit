@@ -344,3 +344,44 @@ describe('detached-from (RFC-0035)', () => {
     expect(codes(validate(fill('<row />')))).toContain('SLOT_ACCEPT')
   })
 })
+
+describe('colors and dimensions (RFC-0033)', () => {
+  const codes = (r: ReturnType<typeof validate>) => r.errors.map((e) => e.code)
+  const warns = (r: ReturnType<typeof validate>) => r.warnings.map((w) => w.code)
+  const at = (node: string, v = '0.3.9') => validate(`<gui version="${v}"><col w="390">${node}</col></gui>`)
+
+  test('hex, rgba and oklch are valid everywhere a color goes', () => {
+    for (const color of ['#FF0000', '#FF000080', 'rgba(255, 0, 0, 0.5)', 'oklch(0.6 0.2 250)', 'oklch(0.6 0.2 250 / 0.5)', 'oklch(60% 0.2 250)']) {
+      expect(at(`<col w="10" h="10" fill="${color}" />`).errors).toEqual([])
+    }
+    expect(at('<col w="10" h="10" fill="linear-gradient(90deg, rgba(255, 255, 255, 0) 0%, oklch(0.6 0.2 250) 100%)" />').errors).toEqual([])
+    const tokens = validate('<gui version="0.3.9"><tokens><color name="a" value="oklch(0.627 0.258 29.23)" /><color name="b" value="rgba(0, 0, 0, 0.4)" /></tokens><col w="10" fill="$a" /></gui>')
+    expect(tokens.errors).toEqual([])
+  })
+
+  test('rgb() is drawn but warns with the hex to write', () => {
+    const r = at('<col w="10" h="10" fill="linear-gradient(90deg, rgb(255,0,0) 0%, #FFFFFF 100%)" />')
+    expect(r.errors).toEqual([])
+    expect(r.warnings.find((w) => w.code === 'RGB_COLOR')?.message).toContain('#FF0000')
+  })
+
+  test('malformed colors are errors from 0.3.9', () => {
+    for (const color of ['oklch(banana)', 'rgba(255, 0, 0)', 'rgba(300, 0, 0, 0.5)', 'oklch(1.5 0.2 250)']) {
+      expect(codes(at(`<col w="10" h="10" fill="${color}" />`))).toContain('INVALID_COLOR')
+    }
+    expect(codes(at('<col w="10" h="10" fill="red" />'))).toContain('INVALID_FILL')
+    expect(warns(at('<col w="10" h="10" fill="oklch(banana)" />', '0.3.8'))).toContain('INVALID_COLOR')
+  })
+
+  test('% is for sizes only; other units are errors from 0.3.9', () => {
+    for (const node of ['<col w="50%" />', '<col max-width="80%" />', '<col w="fill" p="16 24" />']) {
+      expect(at(node).errors).toEqual([])
+    }
+    for (const node of ['<col w="320px" />', '<col w="1.5rem" />', '<col w="100vw" />', '<col w="calc(100% - 16px)" />', '<col w="10" p="10%" />', '<col w="10" h="10" radius="50%" />']) {
+      expect(codes(at(node))).toContain('INVALID_DIMENSION')
+    }
+    const before = at('<col w="320px" />', '0.3.8')
+    expect(before.valid).toBe(true)
+    expect(warns(before)).toContain('INVALID_DIMENSION')
+  })
+})

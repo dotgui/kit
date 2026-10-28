@@ -1,6 +1,6 @@
 /**
  * dotgui-core — Validator
- * Reads documents up to spec 0.3.8 (see SUPPORTED_VERSION).
+ * Reads documents up to spec 0.3.9 (see SUPPORTED_VERSION).
  *
  * Validates a .guix markup string against the dotgui spec.
  * Goes beyond structural checks — resolves token refs, asset refs,
@@ -211,43 +211,69 @@ function isHexColor(value: string): boolean {
   return /^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$/.test(value)
 }
 
-/** rgba(r, g, b, a) — alpha as 0–1 float */
+const NUM = '\\d+(?:\\.\\d+)?|\\.\\d+'
+
+/** rgba(r, g, b, a): integers 0–255, alpha 0–1 (RFC-0033). */
 function isRgbaColor(value: string): boolean {
-  return /^rgba\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*[\d.]+\s*\)$/.test(value)
+  const m = new RegExp(`^rgba\\(\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(${NUM})\\s*\\)$`).exec(value)
+  return !!m && [m[1], m[2], m[3]].every((c) => Number(c) <= 255) && Number(m[4]) <= 1
 }
 
-/** oklch(l c h) or oklch(l c h / a) */
+/** rgb(r, g, b): drawn for existing exports, but not part of the format — hex says it. */
+function isRgbColor(value: string): boolean {
+  const m = /^rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$/.exec(value)
+  return !!m && [m[1], m[2], m[3]].every((c) => Number(c) <= 255)
+}
+
+/** The hex an rgb() color should be written as. */
+function rgbToHex(value: string): string {
+  const [r, g, b] = (value.match(/\d+/g) || []).map(Number)
+  return '#' + [r, g, b].map((c) => c.toString(16).padStart(2, '0').toUpperCase()).join('')
+}
+
+/** oklch(L C H) or oklch(L C H / a): L 0–1 or a percentage, C ≥ 0, H in degrees, a 0–1 or a percentage. */
 function isOklchColor(value: string): boolean {
-  return /^oklch\(/.test(value)
-}
-
-/** Any supported color notation: hex, rgba, or oklch */
-function isColorValue(value: string): boolean {
-  return isHexColor(value) || isRgbaColor(value) || isOklchColor(value)
+  const m = new RegExp(`^oklch\\(\\s*(${NUM})(%?)\\s+(${NUM})\\s+(-?(?:${NUM}))(?:deg)?\\s*(?:\\/\\s*(${NUM})(%?)\\s*)?\\)$`).exec(value)
+  if (!m) return false
+  const lightness = Number(m[1]) / (m[2] ? 100 : 1)
+  const alpha = m[5] === undefined ? 1 : Number(m[5]) / (m[6] ? 100 : 1)
+  return lightness <= 1 && alpha <= 1
 }
 
 function isGradient(value: string): boolean {
   return /^(linear-gradient|radial-gradient|conic-gradient)\(/.test(value)
 }
 
+/**
+ * A value in one of the color notations. The exact rgb(), rgba() and oklch()
+ * forms are checked by `checkUnits`, which holds them to 0.3.9's rules.
+ */
+function isColorNotation(value: string): boolean {
+  return isHexColor(value) || /^(rgba?|oklch)\(.*\)$/.test(value)
+}
+
 function isValidFill(value: string): boolean {
   // 'none'/'transparent' are honored no-paint sentinels (see render color parser).
   if (value === 'none' || value === 'transparent') return true
-  return isColorValue(value) || isGradient(value) || isTokenRef(value)
+  return isColorNotation(value) || isGradient(value) || isTokenRef(value)
 }
 
 function isValidColor(value: string): boolean {
-  return isColorValue(value) || isTokenRef(value)
+  return isColorNotation(value) || isTokenRef(value)
 }
 
-/** A valid dimension: bare number, or string with an allowed unit */
-function isValidDimension(value: string): boolean {
-  if (/^-?\d+(\.\d+)?$/.test(value)) return true           // bare number → px
-  if (/^\d+(\.\d+)?(px|%|rem|vw|vh)$/.test(value)) return true  // explicit unit
-  if (/^calc\(/.test(value)) return true                    // calc() — content not validated
-  if (value === 'fill' || value === 'hug' || value === 'auto') return true
-  return false
+/** Every rgb(), rgba() and oklch() call inside a value — the stops of a gradient. */
+function colorCalls(value: string): string[] {
+  return value.match(/(?:rgba?|oklch)\([^()]*\)/g) || []
 }
+
+/** Sizes, which may also be a share of the parent (RFC-0033). */
+const SIZE_ATTRS = new Set(['w', 'h', 'min-width', 'max-width', 'min-height', 'max-height'])
+/** Other dimensions: bare numbers (or tokens, or a keyword) only. */
+const DIMENSION_ATTRS = new Set([
+  'x', 'y', 'p', 'pt', 'pr', 'pb', 'pl', 'gap', 'radius',
+  'font-size', 'line-height', 'letter-spacing', 'stroke-width', 'border-width',
+])
 
 function isNumeric(value: string): boolean {
   return !isNaN(Number(value))
@@ -265,8 +291,8 @@ function isNumeric(value: string): boolean {
  * checked against rules this kit does not know. The kit's own version shares
  * the spec's chapter and counts its own patch.
  */
-export const SUPPORTED_VERSION = '0.3.8'
-const SUPPORTED: [number, number, number] = [0, 3, 8]
+export const SUPPORTED_VERSION = '0.3.9'
+const SUPPORTED: [number, number, number] = [0, 3, 9]
 
 /** RFC-0036's recommended platform values. Others are allowed, and warned on. */
 export const RECOMMENDED_PLATFORMS = new Set(['ios', 'android', 'web', 'desktop', 'tv', 'watch'])
@@ -405,7 +431,7 @@ export function validate(guiXml: string, options: ValidateOptions = {}): Validat
       if (t.tag === 'color') {
         const vals = t.attrs.value !== undefined ? [t.attrs.value, ...moded] : moded
         for (const v of vals) {
-          if (!isColorValue(v)) {
+          if (!isColorNotation(v)) {
             err('TOKEN_INVALID_COLOR', `Color token "${t.attrs.name}" has invalid color value: ${v}. Expected hex, rgba(), or oklch().`, `gui > tokens > color`)
           }
         }
@@ -432,7 +458,7 @@ export function validate(guiXml: string, options: ValidateOptions = {}): Validat
       } else if (s.tag === 'fill-style') {
         if (!s.attrs.value) {
           err('MISSING_ATTR', `<fill-style name="${s.attrs.name}"> missing required attribute: value`, stylePath)
-        } else if (!isColorValue(s.attrs.value)) {
+        } else if (!isColorNotation(s.attrs.value)) {
           err('INVALID_FILL_STYLE_VALUE', `<fill-style> value must be a color (hex, rgba, or oklch), got "${s.attrs.value}"`, stylePath)
         }
         fillStyleNames.add(s.attrs.name)
@@ -835,6 +861,10 @@ export function validate(guiXml: string, options: ValidateOptions = {}): Validat
   // name inside an instance.
   checkSlots(root, violation, warn)
 
+  // Colors and dimensions (RFC-0033). 0.3.9 rules — errors from 0.3.9,
+  // warnings before.
+  checkUnits(root, parsedVersion && compareVersions(parsedVersion, [0, 3, 9]) >= 0 ? err : warn, warn)
+
   // Identity (RFC-0046): ids, prop target paths, and source-id. These are
   // 0.3.7 rules — errors from 0.3.7, warnings in a document written before.
   const identity = parsedVersion && compareVersions(parsedVersion, [0, 3, 7]) >= 0 ? err : warn
@@ -1151,4 +1181,52 @@ function checkDetached(root: El, report: Report) {
   root.children.forEach((child, i) => {
     if (child.tag !== 'tokens') visit(child, `gui > ${child.tag}[${i}]`)
   })
+}
+
+// ---------------------------------------------------------------------------
+// Colors and dimensions (RFC-0033)
+// ---------------------------------------------------------------------------
+
+/**
+ * Colors: every rgba() and oklch() — in a fill, a gradient stop, a token —
+ * has the exact form, and rgb() warns with the hex to write. Dimensions: a
+ * bare number everywhere, `%` on sizes only, and no px suffix, rem, vw/vh or
+ * calc().
+ */
+function checkUnits(root: El, report: Report, advise: Report) {
+  function checkColors(value: string, at: string) {
+    for (const call of colorCalls(value)) {
+      if (call.startsWith('rgb(')) {
+        if (isRgbColor(call)) advise('RGB_COLOR', `${call} is not part of the format; write ${rgbToHex(call)}`, at)
+        else report('INVALID_COLOR', `"${call}" is not a valid rgb() color`, at)
+      } else if (call.startsWith('rgba(') ? !isRgbaColor(call) : !isOklchColor(call)) {
+        report('INVALID_COLOR', `"${call}" is not a valid color: write rgba(r, g, b, a) with r, g, b 0–255 and a 0–1, or oklch(L C H) / oklch(L C H / a)`, at)
+      }
+    }
+  }
+  function checkDimension(attr: string, value: string, at: string) {
+    if (value.trim().startsWith('calc(')) {
+      report('INVALID_DIMENSION', `${attr}="${value}": calc() is not part of the format; use fill with padding or gap`, at)
+      return
+    }
+    for (const part of value.trim().split(/\s+/)) {
+      const unit = /^-?(?:\d+(?:\.\d+)?|\.\d+)(px|rem|em|vw|vh|%)$/.exec(part)
+      if (!unit) continue
+      if (unit[1] === '%') {
+        if (!SIZE_ATTRS.has(attr)) report('INVALID_DIMENSION', `${attr}="${value}": % is a share of the parent, and only sizes (w, h, min-*, max-*) take it`, at)
+      } else if (unit[1] === 'px') {
+        report('INVALID_DIMENSION', `${attr}="${value}": write ${part.slice(0, -2)} — a bare number is pixels`, at)
+      } else {
+        report('INVALID_DIMENSION', `${attr}="${value}": ${unit[1]} is not a unit of the format; dimensions are bare numbers in pixels`, at)
+      }
+    }
+  }
+  function visit(el: El, at: string) {
+    for (const [attr, value] of Object.entries(el.attrs)) {
+      if (SIZE_ATTRS.has(attr) || DIMENSION_ATTRS.has(attr)) checkDimension(attr, value, at)
+      else checkColors(value, at)
+    }
+    el.children.forEach((child, i) => visit(child, `${at} > ${child.tag}[${i}]`))
+  }
+  root.children.forEach((child, i) => visit(child, `gui > ${child.tag}[${i}]`))
 }
