@@ -11,7 +11,7 @@ import { DOMParser as XmlDOMParser, XMLSerializer as XmlXMLSerializer } from '@x
 
 export type El = any // Element (native or xmldom — same read surface)
 
-export const BOOLEAN_ATTRS = ['clip', 'mask', 'wrap', 'abs', 'truncate', 'reverse-z']
+export const BOOLEAN_ATTRS = ['clip', 'mask', 'mask-invert', 'wrap', 'abs', 'truncate', 'reverse-z']
 const BARE_BOOL_RE = new RegExp(`(\\s)(${BOOLEAN_ATTRS.join('|')})(?=\\s|/|>)`, 'g')
 
 export interface ParseResult {

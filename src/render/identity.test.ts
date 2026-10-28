@@ -102,3 +102,11 @@ describe('fill and border in the HTML renderer (RFC-0022)', () => {
     expect(html).toMatch(/rgba\(255, ?0, ?0, ?0\.5\)/)
   })
 })
+
+describe('masks in the HTML renderer (RFC-0028)', () => {
+  test('mask-invert cuts the shape out', () => {
+    const doc = (attr: string) => `<gui version="0.3.11"><col w="400"><group w="100" h="100" mask-src="https://example.com/m.svg" ${attr}><col w="100" h="100" fill="#FF0000" /></group></col></gui>`
+    expect(renderToHTML(doc('mask-invert'))).toMatch(/mask-composite:\s*exclude|-webkit-mask-composite:\s*xor/)
+    expect(renderToHTML(doc(''))).not.toMatch(/mask-composite/)
+  })
+})

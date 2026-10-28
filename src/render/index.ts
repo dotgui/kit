@@ -32,6 +32,7 @@ const PRESENCE_ATTR_VALUES: Record<string, string> = {
   clip: 'true',
   gap: 'auto',
   mask: 'true',
+  'mask-invert': 'true',
   'reverse-z': 'true',
   truncate: 'true',
   wrap: 'true',
@@ -1700,13 +1701,14 @@ function renderFrame(el: Element, assets: Record<string, string>, ctx: Ctx, isSt
 // Apply a CSS mask-image to a container div from a mask-src asset or a child mask node.
 function applyContainerMask(div: HTMLElement, el: Element, assets: Record<string, string>): void {
   const maskSrc = get(el, 'mask-src')
-  if (maskSrc && assets[maskSrc]) {
+  // A packaged asset, or an absolute URL in a standalone document (RFC-0043).
+  const maskUrl = maskSrc ? assets[maskSrc] || (/^https?:\/\//i.test(maskSrc) ? maskSrc : undefined) : undefined
+  if (maskSrc && maskUrl) {
     const mx = get(el, 'mask-x') || '0'
     const my = get(el, 'mask-y') || '0'
     const mw = get(el, 'mask-width') || String(get(el, 'w') || '100%')
     const mh = get(el, 'mask-height') || String(get(el, 'h') || '100%')
-    const url = assets[maskSrc]
-    const mask = `url("${url}")`
+    const mask = `url("${maskUrl}")`
     div.style.webkitMaskImage = mask
     div.style.maskImage = mask
     div.style.webkitMaskSize = `${mw}px ${mh}px`
@@ -1720,8 +1722,21 @@ function applyContainerMask(div: HTMLElement, el: Element, assets: Record<string
       div.style.maskMode = maskMode
       ;(div.style as any).webkitMaskMode = maskMode
     }
-    const maskComposite = get(el, 'mask-composite')
-    if (maskComposite) div.style.maskComposite = maskComposite
+    // mask-invert cuts the shape out: the mask is excluded from a full layer
+    // (RFC-0028). mask-composite is its pre-0.3.11 form.
+    const invert = getRaw(el, 'mask-invert')
+    const composite = get(el, 'mask-composite')
+    if (invert === '' || invert === 'true' || composite === 'subtract' || composite === 'exclude') {
+      const full = 'linear-gradient(#000, #000)'
+      for (const prefix of ['', '-webkit-']) {
+        div.style.setProperty(`${prefix}mask-image`, `${mask}, ${full}`)
+        div.style.setProperty(`${prefix}mask-size`, `${mw}px ${mh}px, 100% 100%`)
+        div.style.setProperty(`${prefix}mask-position`, `${mx}px ${my}px, 0 0`)
+        div.style.setProperty(`${prefix}mask-repeat`, 'no-repeat')
+      }
+      div.style.setProperty('mask-composite', 'exclude')
+      div.style.setProperty('-webkit-mask-composite', 'xor')
+    }
   }
 }
 
