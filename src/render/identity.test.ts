@@ -110,3 +110,11 @@ describe('masks in the HTML renderer (RFC-0028)', () => {
     expect(renderToHTML(doc(''))).not.toMatch(/mask-composite/)
   })
 })
+
+describe('description and template in the HTML renderer (RFC-0057)', () => {
+  test('neither changes what is drawn', () => {
+    const plain = renderToHTML('<gui version="0.4.3"><components><component id="comp-a"><row w="10" h="10" fill="#FF0000" /></component></components><col w="40"><instance component="comp-a" /></col></gui>')
+    const described = renderToHTML('<gui version="0.4.3" template><components><component id="comp-a" description="Primary action."><row w="10" h="10" fill="#FF0000" /></component></components><col w="40"><instance component="comp-a" /></col></gui>')
+    expect(described).toBe(plain)
+  })
+})

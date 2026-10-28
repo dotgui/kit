@@ -33,6 +33,7 @@ const PRESENCE_ATTR_VALUES: Record<string, string> = {
   gap: 'auto',
   mask: 'true',
   'mask-invert': 'true',
+  template: 'true',
   'reverse-z': 'true',
   truncate: 'true',
   wrap: 'true',
