@@ -57,6 +57,8 @@ export interface GuiInfo {
   name?: string
   /** <gui platform="…">, if set. */
   platform?: string
+  /** <gui source="…">: the tool that exported the file, if set (RFC-0036). */
+  source?: string
   /** Document filenames in order; one entry for a single-document package. */
   documents: string[]
   /** Whether the package carries a library.guix. */
@@ -192,6 +194,7 @@ export function info(pkg: GuiPackage): GuiInfo {
   return {
     name: attr('name'),
     platform: attr('platform'),
+    source: attr('source'),
     documents: listDocuments(pkg),
     hasLibrary: pkg.library !== undefined,
     assets: listAssets(pkg),

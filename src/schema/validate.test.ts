@@ -211,3 +211,26 @@ describe('typed props (RFC-0034)', () => {
     expect(codes(r)).not.toContain('PROP_NO_BIND')
   })
 })
+
+describe('platform and source on <gui> (RFC-0036)', () => {
+  const warnings = (xml: string) => validate(xml).warnings.map((w) => w.code)
+
+  test('both are accepted on the root', () => {
+    const r = validate('<gui version="0.3.6" name="Checkout" platform="ios" source="figma"><col w="10" /></gui>')
+    expect(r.errors).toEqual([])
+    expect(r.warnings.map((w) => w.code)).not.toContain('UNKNOWN_PLATFORM')
+  })
+
+  test('a platform outside the recommended list warns, never fails', () => {
+    const r = validate('<gui version="0.3.6" platform="iso"><col w="10" /></gui>')
+    expect(r.valid).toBe(true)
+    expect(r.warnings.map((w) => w.code)).toContain('UNKNOWN_PLATFORM')
+  })
+
+  test('<meta> is obsolete from 0.3.6 and fine before it', () => {
+    const meta = '<meta source="figma" source-node="1:2" exported-at="2026-01-01T00:00:00Z" />'
+    expect(warnings(`<gui version="0.3.6">${meta}<col w="10" /></gui>`)).toContain('OBSOLETE_META')
+    expect(warnings(`<gui version="0.3.5">${meta}<col w="10" /></gui>`)).not.toContain('OBSOLETE_META')
+    expect(validate(`<gui version="0.3.6">${meta}<col w="10" /></gui>`).valid).toBe(true)
+  })
+})

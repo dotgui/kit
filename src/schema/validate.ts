@@ -1,6 +1,6 @@
 /**
  * dotgui-core — Validator
- * Reads documents up to spec 0.3.5 (see SUPPORTED_VERSION).
+ * Reads documents up to spec 0.3.6 (see SUPPORTED_VERSION).
  *
  * Validates a .guix markup string against the dotgui spec.
  * Goes beyond structural checks — resolves token refs, asset refs,
@@ -258,14 +258,18 @@ function isNumeric(value: string): boolean {
 // ---------------------------------------------------------------------------
 
 /**
- * The newest spec point this kit implements in full (spec 0.3.5: paint model,
- * multi-document packages, standalone documents, slots, typed props). Support is
+ * The newest spec point this kit implements in full (spec 0.3.6: paint model,
+ * multi-document packages, standalone documents, slots, typed props,
+ * platform and source on <gui>). Support is
  * cumulative; a document declaring a later point is refused rather than
  * checked against rules this kit does not know. The kit's own version shares
  * the spec's chapter and counts its own patch.
  */
-export const SUPPORTED_VERSION = '0.3.5'
-const SUPPORTED: [number, number, number] = [0, 3, 5]
+export const SUPPORTED_VERSION = '0.3.6'
+const SUPPORTED: [number, number, number] = [0, 3, 6]
+
+/** RFC-0036's recommended platform values. Others are allowed, and warned on. */
+export const RECOMMENDED_PLATFORMS = new Set(['ios', 'android', 'web', 'desktop', 'tv', 'watch'])
 
 /** `major.minor.patch`; a missing part reads as 0. Not a version: null. */
 export function parseVersion(version: string): [number, number, number] | null {
@@ -814,6 +818,17 @@ export function validate(guiXml: string, options: ValidateOptions = {}): Validat
     err('NO_ROOT_NODE', 'No root layout node found in <gui>. Expected <frame>, <stack>, or <group>.', 'gui')
   } else {
     validateNode(layoutRoot, `gui > ${layoutRoot.tag}`, 'gui')
+  }
+
+  // platform and source on the root (RFC-0036). Both are open strings;
+  // a platform outside the recommended list is likely a typo.
+  if (root.attrs.platform !== undefined && !RECOMMENDED_PLATFORMS.has(root.attrs.platform)) {
+    warn('UNKNOWN_PLATFORM', `platform="${root.attrs.platform}" is not a recommended value (${[...RECOMMENDED_PLATFORMS].join(', ')})`, 'gui')
+  }
+  // From 0.3.6 provenance is <gui source>; <meta> is what older exports wrote.
+  const parsedVersion = version ? parseVersion(version) : null
+  if (parsedVersion && compareVersions(parsedVersion, [0, 3, 6]) >= 0 && root.children.some((c) => c.tag === 'meta')) {
+    warn('OBSOLETE_META', '<meta> is obsolete from 0.3.6: write source="…" on <gui>, and leave out exported-at and source-node', 'gui > meta')
   }
 
   // Slots (RFC-0044): declared on a component's layout containers, filled by

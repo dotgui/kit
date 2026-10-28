@@ -173,3 +173,11 @@ describe('standalone documents (RFC-0043)', () => {
     expect(listDocuments(pkg)).toEqual(['02-next.guix', 'design.guix'])
   })
 })
+
+describe('info (RFC-0036)', () => {
+  test('reports platform and source', () => {
+    const pkg = unpack(zip({ 'design.guix': '<gui version="0.3.6" platform="android" source="penpot"><col w="10" /></gui>' }))
+    expect(info(pkg).platform).toBe('android')
+    expect(info(pkg).source).toBe('penpot')
+  })
+})
