@@ -10,7 +10,7 @@
  * what makes `flatten` a plain concatenation: there is never a collision to
  * merge.
  */
-import { parseTree, validate, type El, type ValidationError, type ValidationResult } from '../schema/validate'
+import { parseTree, parseVersion, validate, type El, type ValidationError, type ValidationResult } from '../schema/validate'
 
 export const LIBRARY_NAME = 'library.guix'
 
@@ -169,6 +169,51 @@ function declaredNames(xml: string): { kind: string; name: string }[] {
     }
   }
   return names
+}
+
+/** Component, component-set and variant ids a document declares. */
+function componentIds(xml: string): string[] {
+  const ids: string[] = []
+  for (const block of parseTree(xml).children) {
+    if (block.tag !== 'components') continue
+    for (const comp of block.children) {
+      if (comp.attrs.id) ids.push(comp.attrs.id)
+      if (comp.tag === 'component-set') for (const v of comp.children) if (v.attrs.id) ids.push(v.attrs.id)
+    }
+  }
+  return ids
+}
+
+/**
+ * Component ids are unique across the whole package (RFC-0046): a document may
+ * not declare an id another document in the package also declares. An error
+ * in a document declaring 0.3.7 or higher, a warning before.
+ */
+export function checkComponentIdsAcross(documentXml: string, others: string[]): { errors: ValidationError[]; warnings: ValidationError[] } {
+  const out = { errors: [] as ValidationError[], warnings: [] as ValidationError[] }
+  let mine: string[]
+  let strict = false
+  try {
+    const root = parseTree(documentXml)
+    const v = parseVersion(root.attrs.version || '')
+    strict = !!v && (v[0] > 0 || v[1] > 3 || (v[1] === 3 && v[2] >= 7))
+    mine = componentIds(documentXml)
+  } catch {
+    return out
+  }
+  const elsewhere = new Set<string>()
+  for (const xml of others) {
+    try { for (const id of componentIds(xml)) elsewhere.add(id) } catch { /* reported when that document is validated */ }
+  }
+  for (const id of mine) {
+    if (!elsewhere.has(id)) continue
+    ;(strict ? out.errors : out.warnings).push({
+      code: 'DUPLICATE_COMPONENT_ID',
+      message: `component id "${id}" is also declared by another document in the package; component ids are unique across the package`,
+      path: 'gui > components',
+    })
+  }
+  return out
 }
 
 function versionOf(root: El): [number, number] | null {
