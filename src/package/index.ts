@@ -12,6 +12,11 @@
  * consumer that only knows one screen keeps working; `documents` holds them
  * all, and `pack` writes every one back.
  *
+ * A package may also be a directory named *.gui holding the same entries
+ * (RFC-0054). `fromEntries` and `toEntries` are the one step both forms pass
+ * through: a caller that walks a directory hands its files to `fromEntries`,
+ * and `unpack` hands it a ZIP's.
+ *
  * Everything here is pure and byte-based — unzip/zip happen in memory, nothing
  * touches disk. Read the markup, list/add/remove assets, swap the preview, all
  * without extracting a shadow folder. File-system glue (paths, temp, cache) is
@@ -50,6 +55,11 @@ export interface GuiPackage {
   assets: Record<string, Uint8Array>
   /** preview.webp bytes, if present. */
   preview?: Uint8Array
+  /**
+   * Entries read but not part of the package — dotfiles, stray files, a
+   * `.guix` below the root — in path order (RFC-0054). Never written back.
+   */
+  ignored?: string[]
 }
 
 export interface GuiInfo {
@@ -67,6 +77,20 @@ export interface GuiInfo {
   assets: string[]
   /** Whether a preview.webp is present. */
   hasPreview: boolean
+  /** Entries that were read but are not part of the package (RFC-0054). */
+  ignored: string[]
+}
+
+/**
+ * Thrown when a package's entries cannot be one package (RFC-0054): a path
+ * that leaves the package, or two paths that differ only in case or Unicode
+ * normalization. `paths` names the entries at fault.
+ */
+export class PackageEntryError extends Error {
+  constructor(public paths: string[], message: string) {
+    super(message)
+    this.name = 'PackageEntryError'
+  }
 }
 
 /** True if the bytes are a ZIP (PK header) rather than a raw .guix. */
@@ -87,28 +111,74 @@ export function unpack(bytes: Uint8Array): GuiPackage {
   if (!isZip(bytes)) {
     return { xml: strFromU8(bytes), assets: {}, standalone: true }
   }
+  return fromEntries(unzipSync(bytes))
+}
 
-  const entries = unzipSync(bytes)
-  // Documents sit at the root; a .guix inside a directory is not one.
-  const names = Object.keys(entries)
-    .filter((k) => k.endsWith('.guix') && !k.includes('/') && k !== LIBRARY_NAME)
-    .sort()
+/** What an entry is to the package, or null when it is not part of it. */
+function entryKind(path: string): 'document' | 'library' | 'preview' | 'asset' | null {
+  // A dotfile is a tool's state, at any depth — never part of the package.
+  if (path.split('/').some((segment) => segment.startsWith('.'))) return null
+  if (!path.includes('/')) {
+    if (path === LIBRARY_NAME) return 'library'
+    if (path.endsWith('.guix')) return 'document'
+    if (path === PREVIEW_NAME) return 'preview'
+    return null
+  }
+  return path.startsWith(ASSET_PREFIX) ? 'asset' : null
+}
+
+/**
+ * Build a package from its entries: relative paths to bytes, from a ZIP or a
+ * walked `.gui` directory (RFC-0054). Entries that are not part of the
+ * package are ignored and listed in `ignored`. A path that leaves the package,
+ * or two paths that differ only in case or Unicode normalization, throw
+ * `PackageEntryError`. Symbolic links are the caller's to refuse, since only
+ * the caller touches the file system.
+ */
+export function fromEntries(input: Record<string, Uint8Array>): GuiPackage {
+  const entries: Record<string, Uint8Array> = {}
+  const seen = new Map<string, string>()
+  for (const [raw, data] of Object.entries(input)) {
+    if (raw.endsWith('/')) continue // a ZIP's directory entry
+    const path = raw.normalize('NFC')
+    if (/^([/\\]|[A-Za-z]:)/.test(path) || path.split(/[/\\]/).includes('..')) {
+      throw new PackageEntryError([raw], `entry "${raw}" resolves outside the package`)
+    }
+    const key = path.toLowerCase()
+    const other = seen.get(key)
+    if (other !== undefined) {
+      throw new PackageEntryError([other, raw], `entries "${other}" and "${raw}" differ only in case or Unicode normalization, which a file system cannot hold apart`)
+    }
+    seen.set(key, raw)
+    entries[path] = data
+  }
+
+  const paths = Object.keys(entries).sort()
+  const names = paths.filter((p) => entryKind(p) === 'document')
   if (names.length === 0) throw new Error('no .guix document inside the .gui package')
 
   const documents: Record<string, string> = {}
   for (const name of names) documents[name] = strFromU8(entries[name])
 
   const pkg: GuiPackage = { xml: documents[names[0]], documents, primary: names[0], assets: {} }
-  if (entries[LIBRARY_NAME]) pkg.library = strFromU8(entries[LIBRARY_NAME])
-  for (const [name, data] of Object.entries(entries)) {
-    if (name === PREVIEW_NAME) { pkg.preview = data; continue }
-    if (name.startsWith(ASSET_PREFIX)) pkg.assets[name] = data
+  const ignored: string[] = []
+  for (const path of paths) {
+    const kind = entryKind(path)
+    if (kind === 'library') pkg.library = strFromU8(entries[path])
+    else if (kind === 'preview') pkg.preview = entries[path]
+    else if (kind === 'asset') pkg.assets[path] = entries[path]
+    else if (kind === null) ignored.push(path)
   }
+  if (ignored.length) pkg.ignored = ignored
   return pkg
 }
 
-/** Zip the package model back into .gui bytes. */
-export function pack(pkg: GuiPackage): Uint8Array {
+/**
+ * The package's entries, in lexical path order, with names in NFC — what a
+ * ZIP holds and what a `.gui` directory holds, path for path (RFC-0054).
+ * Ignored entries are never written.
+ */
+export function toEntries(pkg: GuiPackage): Record<string, Uint8Array> {
   const entries: Record<string, Uint8Array> = {}
   if (pkg.documents && pkg.primary) {
     for (const [name, xml] of Object.entries(pkg.documents)) entries[name] = strToU8(xml)
@@ -121,7 +191,14 @@ export function pack(pkg: GuiPackage): Uint8Array {
   if (pkg.library !== undefined) entries[LIBRARY_NAME] = strToU8(pkg.library)
   if (pkg.preview) entries[PREVIEW_NAME] = pkg.preview
   for (const [name, data] of Object.entries(pkg.assets)) entries[assetKey(name)] = data
-  return zipSync(entries)
+  const ordered: Record<string, Uint8Array> = {}
+  for (const name of Object.keys(entries).sort()) ordered[name.normalize('NFC')] = entries[name]
+  return ordered
+}
+
+/** Zip the package model back into .gui bytes, entries in lexical order. */
+export function pack(pkg: GuiPackage): Uint8Array {
+  return zipSync(toEntries(pkg))
 }
 
 // ─── read ───────────────────────────────────────────────────────────────────
@@ -193,7 +270,13 @@ export function validateDocument(pkg: GuiPackage, name?: string): ValidationResu
     .filter((x): x is string => x !== undefined)
   const across = checkComponentIdsAcross(xml, others)
   const errors = [...result.errors, ...across.errors]
-  return { ...result, valid: errors.length === 0, errors, warnings: [...result.warnings, ...across.warnings] }
+  // Ignoring is not hiding (RFC-0054): every ignored entry is named.
+  const ignored = (pkg.ignored || []).map((path) => ({
+    code: 'IGNORED_ENTRY',
+    message: `"${path}" is not part of the package and is ignored`,
+    path: 'package',
+  }))
+  return { ...result, valid: errors.length === 0, errors, warnings: [...result.warnings, ...across.warnings, ...ignored] }
 }
 
 export function info(pkg: GuiPackage): GuiInfo {
@@ -207,6 +290,7 @@ export function info(pkg: GuiPackage): GuiInfo {
     hasLibrary: pkg.library !== undefined,
     assets: listAssets(pkg),
     hasPreview: pkg.preview !== undefined,
+    ignored: pkg.ignored || [],
   }
 }
 
