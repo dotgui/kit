@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate'
 import {
-  unpack, pack, flatten, validateDocument, listDocuments, getDocument, fromEntries, toEntries, PackageEntryError,
+  unpack, pack, flatten, validateDocument, listDocuments, getDocument, fromEntries, toEntries, PackageEntryError, listLibraryFiles, setLibraryFile,
   isMultiDocument, setMarkup, setDocument, setLibrary, addAsset, info, InvalidMarkupError,
 } from './index'
 
@@ -252,5 +252,59 @@ describe('folder-form packages (RFC-0054)', () => {
     expect(() => fromEntries(asEntries({ ...files, [composed]: 'x', [decomposed]: 'y' }))).toThrow(PackageEntryError)
     // A decomposed name alone is written back composed.
     expect(Object.keys(toEntries(fromEntries(asEntries({ ...files, [decomposed]: 'y' }))))).toContain(composed)
+  })
+})
+
+describe('the library directory (RFC-0055)', () => {
+  const v = '0.4.2'
+  const files: Record<string, string> = {
+    '01-screen.guix': `<gui version="${v}"><col w="390" fill="$primary"><instance component="comp-button" /></col></gui>`,
+    'library/tokens.guix': `<gui version="${v}"><tokens><color name="primary" value="#007AFF" /></tokens></gui>`,
+    'library/components/button.guix': `<gui version="${v}"><components><component id="comp-button"><row fill="$primary"><text value="Go" /></row></component></components><row><instance component="comp-button" /></row></gui>`,
+  }
+  const read = (f: Record<string, string>) => fromEntries(Object.fromEntries(Object.entries(f).map(([k, x]) => [k, strToU8(x)])))
+  const codes = (r: { errors: { code: string }[] }) => r.errors.map((e) => e.code)
+
+  test('library files form one library, the same as library.guix', () => {
+    const pkg = read(files)
+    expect(listDocuments(pkg)).toEqual(['01-screen.guix'])
+    expect(info(pkg).libraryFiles).toEqual(['library/components/button.guix', 'library/tokens.guix'])
+    expect(validateDocument(pkg).errors).toEqual([])
+    const flat = flatten(pkg)
+    expect(flat).toContain('name="primary"')
+    expect(flat).toContain('id="comp-button"')
+    // Written back path for path.
+    expect(Object.keys(toEntries(pkg))).toEqual(Object.keys(files).sort())
+  })
+
+  test('a library file resolves names across the rest of the library', () => {
+    expect(validateDocument(read(files), 'library/components/button.guix').errors).toEqual([])
+  })
+
+  test('both forms together are refused; an empty library/ is no library', () => {
+    expect(() => read({ ...files, 'library.guix': `<gui version="${v}"><tokens /></gui>` })).toThrow(PackageEntryError)
+    const lone = read({ '01.guix': files['01-screen.guix'].replace(' fill="$primary"', '').replace('<instance component="comp-button" />', ''), 'library/README.md': '# notes', 'library.guix': `<gui version="${v}"><tokens /></gui>` })
+    expect(lone.libraryFiles).toBeUndefined()
+    expect(lone.ignored).toEqual(['library/README.md'])
+  })
+
+  test('a name in two library files is an error naming both, mode axes included', () => {
+    const dup = read({ ...files, 'library/brand.guix': `<gui version="${v}"><tokens><color name="primary" value="#FF0000" /></tokens></gui>` })
+    const err = validateDocument(dup).errors.find((e) => e.code === 'LIBRARY_COLLISION')
+    expect(err?.message).toContain('library/brand.guix')
+    expect(err?.message).toContain('library/tokens.guix')
+    const modes = read({ ...files, 'library/a.guix': `<gui version="${v}"><mode name="theme" values="light dark" /></gui>`, 'library/b.guix': `<gui version="${v}"><mode name="theme" values="light dark" /></gui>` })
+    expect(codes(validateDocument(modes))).toContain('LIBRARY_COLLISION')
+  })
+
+  test('every file declares 0.4.2 or higher', () => {
+    const old = read({ ...files, '01-screen.guix': files['01-screen.guix'].replace(v, '0.4.1') })
+    expect(codes(validateDocument(old))).toContain('VERSION_BELOW_LIBRARY_DIRECTORY')
+  })
+
+  test('setLibraryFile adds a file validated against the library; setLibrary refuses a split one', () => {
+    const pkg = setLibraryFile(read(files), 'library/components/card.guix', `<gui version="${v}"><components><component id="comp-card"><col fill="$primary" /></component></components></gui>`)
+    expect(listLibraryFiles(pkg)).toContain('library/components/card.guix')
+    expect(() => setLibrary(pkg, '<gui version="0.4.2"><tokens /></gui>')).toThrow()
   })
 })
