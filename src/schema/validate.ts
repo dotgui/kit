@@ -1,6 +1,6 @@
 /**
  * dotgui-core — Validator
- * Reads documents up to spec 0.3.6 (see SUPPORTED_VERSION).
+ * Reads documents up to spec 0.3.7 (see SUPPORTED_VERSION).
  *
  * Validates a .guix markup string against the dotgui spec.
  * Goes beyond structural checks — resolves token refs, asset refs,
@@ -265,8 +265,8 @@ function isNumeric(value: string): boolean {
  * checked against rules this kit does not know. The kit's own version shares
  * the spec's chapter and counts its own patch.
  */
-export const SUPPORTED_VERSION = '0.3.6'
-const SUPPORTED: [number, number, number] = [0, 3, 6]
+export const SUPPORTED_VERSION = '0.3.7'
+const SUPPORTED: [number, number, number] = [0, 3, 7]
 
 /** RFC-0036's recommended platform values. Others are allowed, and warned on. */
 export const RECOMMENDED_PLATFORMS = new Set(['ios', 'android', 'web', 'desktop', 'tv', 'watch'])
@@ -835,6 +835,11 @@ export function validate(guiXml: string, options: ValidateOptions = {}): Validat
   // name inside an instance.
   checkSlots(root, violation, warn)
 
+  // Identity (RFC-0046): ids, prop target paths, and source-id. These are
+  // 0.3.7 rules — errors from 0.3.7, warnings in a document written before.
+  const identity = parsedVersion && compareVersions(parsedVersion, [0, 3, 7]) >= 0 ? err : warn
+  checkIdentity(root, identity)
+
   // Asset references (RFC-0043): never a data: URI, and in a standalone
   // document never a local path. These are 0.3 rules — errors in a document
   // declaring 0.3 or higher, warnings in one written before them.
@@ -1009,4 +1014,96 @@ function checkSlots(root: El, violation: Report, advise: Report) {
     el.children.forEach((child, i) => walk(child, `${path} > ${child.tag}[${i}]`))
   }
   root.children.forEach((child, i) => walk(child, `gui > ${child.tag}[${i}]`))
+}
+
+// ---------------------------------------------------------------------------
+// Identity (RFC-0046)
+// ---------------------------------------------------------------------------
+
+const ID_FORMAT = /^[a-z][a-z0-9-]*$/
+
+/** Every node of one scope by id. Instances are not entered: their children are slot fills, which belong to the scope that wrote them. */
+function collectScope(body: El, path: string, report: Report): Map<string, El> {
+  const ids = new Map<string, El>()
+  function visit(el: El, at: string) {
+    const id = el.attrs.id
+    if (id !== undefined) {
+      if (!ID_FORMAT.test(id)) report('INVALID_ID', `id="${id}" must be lowercase kebab-case beginning with a letter`, at)
+      if (ids.has(id)) report('DUPLICATE_ID', `id "${id}" is used twice in the same scope`, at)
+      else ids.set(id, el)
+    }
+    el.children.forEach((child, i) => {
+      if (child.tag === 'slot') child.children.forEach((c, j) => visit(c, `${at} > slot[${i}] > ${c.tag}[${j}]`))
+      else visit(child, `${at} > ${child.tag}[${i}]`)
+    })
+  }
+  visit(body, path)
+  return ids
+}
+
+/**
+ * Checks ids within each scope (the screen tree, each component and variant
+ * body), component ids across the document, every prop target and path, and
+ * that a document with any source-id names its source.
+ */
+function checkIdentity(root: El, report: Report) {
+  const bodies = new Map<string, { body: El | undefined; props: El | undefined; path: string }>()
+  const componentsEl = root.children.find((c) => c.tag === 'components')
+  const declareBody = (holder: El, path: string) => {
+    const id = holder.attrs.id
+    if (!id) return
+    if (bodies.has(id)) report('DUPLICATE_COMPONENT_ID', `component id "${id}" is declared twice; component ids are unique across the package`, path)
+    bodies.set(id, {
+      body: holder.children.find((c) => c.tag !== 'props'),
+      props: holder.children.find((c) => c.tag === 'props'),
+      path,
+    })
+  }
+  if (componentsEl) {
+    componentsEl.children.forEach((comp, i) => {
+      const path = `gui > components > ${comp.tag}[${i}]`
+      if (comp.tag === 'component') declareBody(comp, path)
+      else if (comp.tag === 'component-set') {
+        if (comp.attrs.id && bodies.has(comp.attrs.id)) report('DUPLICATE_COMPONENT_ID', `component id "${comp.attrs.id}" is declared twice; component ids are unique across the package`, path)
+        comp.children.forEach((v, vi) => { if (v.tag === 'variant') declareBody(v, `${path} > variant[${vi}]`) })
+      }
+    })
+  }
+
+  const scopes = new Map<string, Map<string, El>>()
+  for (const [id, c] of bodies) {
+    if (c.body) scopes.set(id, collectScope(c.body, `${c.path} > ${c.body.tag}`, report))
+  }
+  const layoutRoot = root.children.find((c) => CHILD_TAGS.has(c.tag))
+  if (layoutRoot) collectScope(layoutRoot, `gui > ${layoutRoot.tag}`, report)
+
+  // A target is an id in the body, or a path whose every segment but the last
+  // names an <instance>; the next segment is read in that instance's component.
+  function resolves(path: string, scope: Map<string, El> | undefined): string | null {
+    const segments = path.split('/')
+    let ids = scope
+    for (let i = 0; i < segments.length; i++) {
+      const node = ids ? ids.get(segments[i]) : undefined
+      if (!node) return `"${segments[i]}" is not an id ${i === 0 ? 'in the component body' : `in component '${segments.slice(0, i).join('/')}'`}`
+      if (i === segments.length - 1) return null
+      if (node.tag !== 'instance') return `"${segments[i]}" is a <${node.tag}>, but every segment but the last must name an <instance>`
+      ids = scopes.get(node.attrs.component)
+    }
+    return null
+  }
+  for (const [id, c] of bodies) {
+    if (!c.props) continue
+    c.props.children.forEach((p, i) => {
+      if (p.tag !== 'prop' || !p.attrs.target) return
+      for (const target of p.attrs.target.trim().split(/\s+/)) {
+        const problem = resolves(target, scopes.get(id))
+        if (problem) report('UNRESOLVED_TARGET', `<prop name="${p.attrs.name}"> target "${target}" does not resolve: ${problem}`, `${c.path} > props > prop[${i}]`)
+      }
+    })
+  }
+
+  if (root.attrs.source === undefined) {
+    const hasSourceId = (el: El): boolean => el.attrs['source-id'] !== undefined || el.children.some(hasSourceId)
+    if (hasSourceId(root)) report('SOURCE_ID_NO_SOURCE', 'the document has source-id values but no source on <gui> to read them against', 'gui')
+  }
 }

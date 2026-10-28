@@ -234,3 +234,69 @@ describe('platform and source on <gui> (RFC-0036)', () => {
     expect(validate(`<gui version="0.3.6">${meta}<col w="10" /></gui>`).valid).toBe(true)
   })
 })
+
+describe('identity (RFC-0046)', () => {
+  const codes = (r: ReturnType<typeof validate>) => r.errors.map((e) => e.code)
+  const tabbar = (target: string, v = '0.3.7') => `<gui version="${v}">
+  <components>
+    <component id="comp-tab-item"><row id="tab"><text id="label" value="Tab" /></row></component>
+    <component id="comp-tabbar">
+      <props><prop name="first-label" type="string" target="${target}" /></props>
+      <row id="bar" gap="8">
+        <instance id="tab-1" component="comp-tab-item" />
+        <instance id="tab-2" component="comp-tab-item" />
+      </row>
+    </component>
+  </components>
+  <col w="390"><instance component="comp-tabbar" first-label="Library" /></col>
+</gui>`
+
+  test('a path through an instance resolves', () => {
+    expect(validate(tabbar('tab-1/label')).errors).toEqual([])
+    expect(validate(tabbar('tab-1/label tab-2/label')).errors).toEqual([])
+  })
+
+  test('a target that does not resolve is an error from 0.3.7', () => {
+    for (const target of ['missing', 'tab-1/missing', 'bar/label', 'tab-9/label']) {
+      expect(codes(validate(tabbar(target)))).toContain('UNRESOLVED_TARGET')
+    }
+    const before = validate(tabbar('missing', '0.3.6'))
+    expect(before.valid).toBe(true)
+    expect(before.warnings.map((w) => w.code)).toContain('UNRESOLVED_TARGET')
+  })
+
+  test('ids are lowercase kebab-case and unique within a scope', () => {
+    expect(codes(validate('<gui version="0.3.7"><col w="10" id="saveButton" /></gui>'))).toContain('INVALID_ID')
+    expect(codes(validate('<gui version="0.3.7"><col w="10"><text id="title" value="a" /><text id="title" value="b" /></col></gui>'))).toContain('DUPLICATE_ID')
+  })
+
+  test('scopes are separate: the screen and each component body', () => {
+    const r = validate(`<gui version="0.3.7">
+  <components>
+    <component id="comp-a"><row><text id="title" value="A" /></row></component>
+    <component id="comp-b"><row><text id="title" value="B" /></row></component>
+  </components>
+  <col w="10" id="screen"><text id="title" value="Screen" /><instance id="a" component="comp-a" /></col>
+</gui>`)
+    expect(r.errors).toEqual([])
+  })
+
+  test('slot content belongs to the scope that wrote it', () => {
+    const r = validate(`<gui version="0.3.7">
+  <components><component id="comp-card"><col slot="body" /></component></components>
+  <col w="10"><text id="title" value="a" /><instance component="comp-card"><slot name="body"><text id="title" value="b" /></slot></instance></col>
+</gui>`)
+    expect(codes(r)).toContain('DUPLICATE_ID')
+  })
+
+  test('component ids are declared once', () => {
+    expect(codes(validate('<gui version="0.3.7"><components><component id="comp-a"><row /></component><component id="comp-a"><row /></component></components><col w="10" /></gui>'))).toContain('DUPLICATE_COMPONENT_ID')
+  })
+
+  test('source-id needs source on the root', () => {
+    expect(validate('<gui version="0.3.7" source="figma" source-id="1:2"><col w="10" source-id="1:3" /></gui>').errors).toEqual([])
+    expect(codes(validate('<gui version="0.3.7"><col w="10" source-id="1:3" /></gui>'))).toContain('SOURCE_ID_NO_SOURCE')
+    // A file with no source-id needs no source.
+    expect(validate('<gui version="0.3.7"><col w="10" /></gui>').errors).toEqual([])
+  })
+})

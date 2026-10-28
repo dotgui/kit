@@ -19,7 +19,7 @@
  */
 import { unzipSync, zipSync, strToU8, strFromU8 } from 'fflate'
 import { validate, type ValidationError, type ValidationResult } from '../schema/validate'
-import { LIBRARY_NAME, flattenWith, validateInPackage } from './library'
+import { LIBRARY_NAME, checkComponentIdsAcross, flattenWith, validateInPackage } from './library'
 
 export { LIBRARY_NAME } from './library'
 
@@ -185,7 +185,15 @@ export function flatten(pkg: GuiPackage, name?: string): string {
 export function validateDocument(pkg: GuiPackage, name?: string): ValidationResult {
   const xml = name === undefined ? pkg.xml : getDocument(pkg, name)
   if (xml === undefined) throw new Error(`no document named ${name} in the package`)
-  return validateInPackage(xml, pkg.library, isMultiDocument(pkg), pkg.standalone)
+  const result = validateInPackage(xml, pkg.library, isMultiDocument(pkg), pkg.standalone)
+  const self = name ?? pkg.primary ?? GUIX_NAME
+  const others = listDocuments(pkg)
+    .filter((d) => d !== self)
+    .map((d) => getDocument(pkg, d))
+    .filter((x): x is string => x !== undefined)
+  const across = checkComponentIdsAcross(xml, others)
+  const errors = [...result.errors, ...across.errors]
+  return { ...result, valid: errors.length === 0, errors, warnings: [...result.warnings, ...across.warnings] }
 }
 
 export function info(pkg: GuiPackage): GuiInfo {

@@ -181,3 +181,29 @@ describe('info (RFC-0036)', () => {
     expect(info(pkg).source).toBe('penpot')
   })
 })
+
+describe('component ids across documents (RFC-0046)', () => {
+  const comp = '<components><component id="comp-row"><row /></component></components>'
+  test('two documents may not declare the same component id', () => {
+    const pkg = unpack(zip({
+      '01-a.guix': `<gui version="0.3.7">${comp}<col w="10" /></gui>`,
+      '02-b.guix': `<gui version="0.3.7">${comp}<col w="10" /></gui>`,
+    }))
+    expect(validateDocument(pkg, '01-a.guix').errors.map((e) => e.code)).toContain('DUPLICATE_COMPONENT_ID')
+  })
+
+  test('different ids are fine, and before 0.3.7 it only warns', () => {
+    const ok = unpack(zip({
+      '01-a.guix': `<gui version="0.3.7">${comp}<col w="10" /></gui>`,
+      '02-b.guix': '<gui version="0.3.7"><col w="10" /></gui>',
+    }))
+    expect(validateDocument(ok, '01-a.guix').errors).toEqual([])
+    const old = unpack(zip({
+      '01-a.guix': `<gui version="0.3.6">${comp}<col w="10" /></gui>`,
+      '02-b.guix': `<gui version="0.3.6">${comp}<col w="10" /></gui>`,
+    }))
+    const r = validateDocument(old, '01-a.guix')
+    expect(r.valid).toBe(true)
+    expect(r.warnings.map((w) => w.code)).toContain('DUPLICATE_COMPONENT_ID')
+  })
+})

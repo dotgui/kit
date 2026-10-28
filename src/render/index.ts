@@ -2578,7 +2578,7 @@ function firstTextDescendant(el: Element): Element | null {
 }
 
 const INSTANCE_POSITIONAL_ATTRS = new Set([
-  'component', 'name', 'x', 'y', 'w', 'h',
+  'component', 'name', 'id', 'source-id', 'x', 'y', 'w', 'h',
   'constraint-h', 'constraint-v', 'abs', 'rotation', 'opacity', 'blend',
   'min-width', 'max-width', 'min-height', 'max-height',
 ])
@@ -2593,6 +2593,35 @@ function implicitTarget(body: Element, name: string, type: string): string[] {
   }
   visit(body)
   return count === 1 ? [name] : []
+}
+
+/**
+ * RFC-0046: overrides handed down a path. A prop whose target is
+ * `tab-1/label` cannot reach `label` yet — it lives in tab-1's component — so
+ * the value waits on the tab-1 instance element and is applied when that
+ * instance's own body is built, after its own props.
+ */
+const pathOverrides = new WeakMap<Element, Array<{ path: string; type: string; value: string; bind: string | null }>>()
+
+/** Applies one prop value to an id in the body, or hands it down a path. */
+function applyToTarget(body: Element, target: string, type: string, value: string, bind: string | null): void {
+  const slash = target.indexOf('/')
+  if (slash !== -1) {
+    const inst = findById(body, target.slice(0, slash))
+    if (!inst || inst.tagName !== 'instance') return
+    const pending = pathOverrides.get(inst) || []
+    pending.push({ path: target.slice(slash + 1), type, value, bind })
+    pathOverrides.set(inst, pending)
+    return
+  }
+  const targetEl = findById(body, target)
+  if (!targetEl) return
+  // For string/text props: if target is a container walk to first <text> descendant
+  const isTextType = type === 'string' || type === 'text'
+  const effectiveTarget = (isTextType && targetEl.tagName !== 'text')
+    ? (firstTextDescendant(targetEl) || targetEl)
+    : targetEl
+  applyOverride(effectiveTarget, type, value, bind)
 }
 
 function applyPropsToBody(body: Element, instance: Element, compEl: Element): void {
@@ -2616,17 +2645,8 @@ function applyPropsToBody(body: Element, instance: Element, compEl: Element): vo
       propMeta[propName] = { type: propType, targets, bind: propBind }
       const overrideVal = instance.getAttribute(propName)
       if (overrideVal === null) continue
-      // Apply to every target id in the list
-      for (const targetId of targets) {
-        const targetEl = findById(body, targetId)
-        if (!targetEl) continue
-        // For string/text props: if target is a container walk to first <text> descendant
-        const isTextType = propType === 'string' || propType === 'text'
-        const effectiveTarget = (isTextType && targetEl.tagName !== 'text')
-          ? (firstTextDescendant(targetEl) || targetEl)
-          : targetEl
-        applyOverride(effectiveTarget, propType, overrideVal, propBind)
-      }
+      // Apply to every target id or path in the list
+      for (const target of targets) applyToTarget(body, target, propType, overrideVal, propBind)
     }
   }
 
@@ -2687,6 +2707,10 @@ function applyPropsToBody(body: Element, instance: Element, compEl: Element): vo
       : targetEl
     applyOverride(effectiveTarget, inferredType, attr.value, inferredBind)
   }
+
+  // Values handed down a path by an enclosing component win over this
+  // instance's own, the same way an instance's props win over the defaults.
+  for (const o of pathOverrides.get(instance) || []) applyToTarget(body, o.path, o.type, o.value, o.bind)
 }
 
 function applyOverride(targetEl: Element, type: string, value: string, bind?: string | null): void {
