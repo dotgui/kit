@@ -427,3 +427,38 @@ describe('fill and border (RFC-0022)', () => {
     expect(warns(r)).toContain('LEGACY_PROP_BIND')
   })
 })
+
+describe('clipping and masks (RFC-0028)', () => {
+  const codes = (r: ReturnType<typeof validate>) => r.errors.map((e) => e.code)
+  const warns = (r: ReturnType<typeof validate>) => r.warnings.map((w) => w.code)
+  const at = (node: string, v = '0.3.11') => validate(`<gui version="${v}"><col w="390">${node}</col></gui>`)
+
+  test('clip, the four clip-path shapes, and mask-src on containers validate', () => {
+    for (const node of [
+      '<frame w="96" h="96" radius="48" clip />',
+      '<col w="10" clip-path="inset(10%)" />',
+      '<col w="10" clip-path="circle(50% at 50% 50%)" />',
+      '<col w="10" clip-path="ellipse(40% 30% at 50% 50%)" />',
+      '<col w="10" clip-path="polygon(0% 0%, 100% 0%, 50% 100%)" />',
+      '<group w="320" h="180" mask-src="https://example.com/blob.svg" mask-mode="luminance" mask-invert />',
+    ]) {
+      expect(at(node).errors).toEqual([])
+    }
+  })
+
+  test('path(), url(), a bad mode, and mask attributes without mask-src are errors', () => {
+    expect(codes(at(`<col w="10" clip-path="path('M0 0 L10 10')" />`))).toContain('INVALID_CLIP_PATH')
+    expect(codes(at('<col w="10" clip-path="url(#m)" />'))).toContain('INVALID_CLIP_PATH')
+    expect(codes(at('<group w="10" h="10" mask-src="https://example.com/m.svg" mask-mode="screen" />'))).toContain('INVALID_MASK_MODE')
+    expect(codes(at('<col w="10" mask-x="4" />'))).toContain('MASK_WITHOUT_SRC')
+    expect(codes(at('<text value="a" mask-src="https://example.com/m.svg" />'))).toContain('MASK_MISPLACED')
+  })
+
+  test('the mask flag and mask-composite are retired from 0.3.11', () => {
+    expect(codes(at('<frame w="10" h="10"><col w="10" mask /></frame>'))).toContain('OBSOLETE_MASK')
+    expect(codes(at('<group w="10" h="10" mask-src="https://example.com/m.svg" mask-composite="subtract" />'))).toContain('OBSOLETE_MASK')
+    const before = at('<frame w="10" h="10"><col w="10" mask /></frame>', '0.3.10')
+    expect(before.valid).toBe(true)
+    expect(warns(before)).toContain('OBSOLETE_MASK')
+  })
+})

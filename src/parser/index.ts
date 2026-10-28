@@ -175,7 +175,7 @@ const NUMERIC_ATTRS = new Set([
 ])
 
 const BOOLEAN_ATTRS = new Set([
-  'wrap', 'clip', 'mask', 'abs', 'truncate', 'reverse-z',
+  'wrap', 'clip', 'mask', 'mask-invert', 'abs', 'truncate', 'reverse-z',
 ])
 
 function coerce(key: string, value: string): unknown {
@@ -312,6 +312,7 @@ const PRESENCE_ATTR_VALUES: Record<string, string> = {
   clip: 'true',
   gap: 'auto',
   mask: 'true',
+  'mask-invert': 'true',
   'reverse-z': 'true',
   truncate: 'true',
   wrap: 'true',

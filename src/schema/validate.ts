@@ -1,6 +1,6 @@
 /**
  * dotgui-core — Validator
- * Reads documents up to spec 0.3.10 (see SUPPORTED_VERSION).
+ * Reads documents up to spec 0.3.11 (see SUPPORTED_VERSION).
  *
  * Validates a .guix markup string against the dotgui spec.
  * Goes beyond structural checks — resolves token refs, asset refs,
@@ -81,6 +81,9 @@ function parse(xml: string): El {
         while (pos < xml.length && xml[pos] !== quote) pos++
         attrs[key] = xml.slice(start, pos)
         pos++ // consume closing quote
+      } else if (key) {
+        // A bare attribute is a presence flag: <frame clip>.
+        attrs[key] = ''
       }
     }
 
@@ -291,8 +294,8 @@ function isNumeric(value: string): boolean {
  * checked against rules this kit does not know. The kit's own version shares
  * the spec's chapter and counts its own patch.
  */
-export const SUPPORTED_VERSION = '0.3.10'
-const SUPPORTED: [number, number, number] = [0, 3, 10]
+export const SUPPORTED_VERSION = '0.3.11'
+const SUPPORTED: [number, number, number] = [0, 3, 11]
 
 /** RFC-0036's recommended platform values. Others are allowed, and warned on. */
 export const RECOMMENDED_PLATFORMS = new Set(['ios', 'android', 'web', 'desktop', 'tv', 'watch'])
@@ -873,6 +876,10 @@ export function validate(guiXml: string, options: ValidateOptions = {}): Validat
   // 0.3.10, warnings before.
   checkFillAndBorder(root, parsedVersion && compareVersions(parsedVersion, [0, 3, 10]) >= 0 ? err : warn)
 
+  // Clipping and masks (RFC-0028). 0.3.11 rules — errors from 0.3.11,
+  // warnings before.
+  checkMasks(root, parsedVersion && compareVersions(parsedVersion, [0, 3, 11]) >= 0 ? err : warn)
+
   // Identity (RFC-0046): ids, prop target paths, and source-id. These are
   // 0.3.7 rules — errors from 0.3.7, warnings in a document written before.
   const identity = parsedVersion && compareVersions(parsedVersion, [0, 3, 7]) >= 0 ? err : warn
@@ -1268,5 +1275,50 @@ function checkFillAndBorder(root: El, report: Report) {
   }
   root.children.forEach((child, i) => {
     if (child.tag !== 'tokens' && child.tag !== 'styles') visit(child, 'gui', `gui > ${child.tag}[${i}]`)
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Clipping and masks (RFC-0028)
+// ---------------------------------------------------------------------------
+
+const CLIP_SHAPES = /^(inset|circle|ellipse|polygon)\(.*\)$/
+const MASK_FAMILY = ['mask-x', 'mask-y', 'mask-width', 'mask-height', 'mask-mode', 'mask-invert']
+
+/**
+ * clip-path is one of four shapes; a mask is mask-src on a layout container,
+ * whose other attributes need it; the mask flag on a child and mask-composite
+ * are retired.
+ */
+function checkMasks(root: El, report: Report) {
+  function visit(el: El, at: string) {
+    if (el.tag !== 'instance' && el.tag !== 'prop') {
+      const clipPath = el.attrs['clip-path']
+      if (clipPath !== undefined && !clipPath.startsWith('$') && !CLIP_SHAPES.test(clipPath.trim())) {
+        report('INVALID_CLIP_PATH', `clip-path="${clipPath}": use inset(), circle(), ellipse() or polygon(); a free-form path is a mask-src asset`, at)
+      }
+      const src = el.attrs['mask-src']
+      if (src !== undefined && !LAYOUT_TAGS.has(el.tag)) {
+        report('MASK_MISPLACED', `<${el.tag}> cannot carry mask-src; only a layout container (${[...LAYOUT_TAGS].join(', ')}) can`, at)
+      }
+      const family = MASK_FAMILY.filter((a) => el.attrs[a] !== undefined)
+      if (src === undefined && family.length) {
+        report('MASK_WITHOUT_SRC', `<${el.tag}> ${family.join(', ')} without mask-src means nothing`, at)
+      }
+      const mode = el.attrs['mask-mode']
+      if (mode !== undefined && mode !== 'alpha' && mode !== 'luminance') {
+        report('INVALID_MASK_MODE', `mask-mode="${mode}" must be alpha or luminance`, at)
+      }
+      if (el.attrs.mask !== undefined) {
+        report('OBSOLETE_MASK', `<${el.tag} mask>: a child no longer masks its siblings; write mask-src on the parent`, at)
+      }
+      if (el.attrs['mask-composite'] !== undefined) {
+        report('OBSOLETE_MASK', `mask-composite="${el.attrs['mask-composite']}": write mask-invert to cut the shape out, or nothing`, at)
+      }
+    }
+    el.children.forEach((child, i) => visit(child, `${at} > ${child.tag}[${i}]`))
+  }
+  root.children.forEach((child, i) => {
+    if (child.tag !== 'tokens' && child.tag !== 'styles') visit(child, `gui > ${child.tag}[${i}]`)
   })
 }

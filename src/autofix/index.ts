@@ -16,7 +16,7 @@ const PADDING_AXES: Record<string, [string, string]> = { py: ['pt', 'pb'], px: [
 /** Attributes the renderer ignores and that have no dotgui equivalent. */
 const DROP_ATTRS = ['margin', 'mt', 'mb', 'ml', 'mr', 'justify', 'justify-content', 'align-items', 'flex']
 /** Presence-based booleans; ="false" means "should be absent". */
-const BOOLEAN_ATTRS = ['clip', 'mask', 'wrap', 'abs', 'truncate', 'reverse-z']
+const BOOLEAN_ATTRS = ['clip', 'mask', 'mask-invert', 'wrap', 'abs', 'truncate', 'reverse-z']
 /** Invented alignment values → closest valid 9-point value (containers). */
 const CONTAINER_ALIGN_REMAP: Record<string, string> = {
   center: 'middle-center', middle: 'middle-center', top: 'top-center', bottom: 'bottom-center',
