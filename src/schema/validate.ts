@@ -1,6 +1,6 @@
 /**
  * dotgui-core — Validator
- * Reads documents up to spec 0.3.7 (see SUPPORTED_VERSION).
+ * Reads documents up to spec 0.3.8 (see SUPPORTED_VERSION).
  *
  * Validates a .guix markup string against the dotgui spec.
  * Goes beyond structural checks — resolves token refs, asset refs,
@@ -265,8 +265,8 @@ function isNumeric(value: string): boolean {
  * checked against rules this kit does not know. The kit's own version shares
  * the spec's chapter and counts its own patch.
  */
-export const SUPPORTED_VERSION = '0.3.7'
-const SUPPORTED: [number, number, number] = [0, 3, 7]
+export const SUPPORTED_VERSION = '0.3.8'
+const SUPPORTED: [number, number, number] = [0, 3, 8]
 
 /** RFC-0036's recommended platform values. Others are allowed, and warned on. */
 export const RECOMMENDED_PLATFORMS = new Set(['ios', 'android', 'web', 'desktop', 'tv', 'watch'])
@@ -840,6 +840,10 @@ export function validate(guiXml: string, options: ValidateOptions = {}): Validat
   const identity = parsedVersion && compareVersions(parsedVersion, [0, 3, 7]) >= 0 ? err : warn
   checkIdentity(root, identity)
 
+  // detached-from (RFC-0035): a reference to a declared component, on layout
+  // containers only. 0.3.8 rules — errors from 0.3.8, warnings before.
+  checkDetached(root, parsedVersion && compareVersions(parsedVersion, [0, 3, 8]) >= 0 ? err : warn)
+
   // Asset references (RFC-0043): never a data: URI, and in a standalone
   // document never a local path. These are 0.3 rules — errors in a document
   // declaring 0.3 or higher, warnings in one written before them.
@@ -989,7 +993,9 @@ function checkSlots(root: El, violation: Report, advise: Report) {
       if (accept !== undefined) {
         const accepted = accept.split(/\s+/).filter(Boolean).flatMap((a) => sets.get(a) ?? [a])
         for (const child of fill.children) {
-          const fits = child.tag === 'instance' && !!child.attrs.component && accepted.includes(child.attrs.component)
+          // A container detached from an accepted component still fits (RFC-0035).
+          const origin = child.tag === 'instance' ? child.attrs.component : child.attrs['detached-from']
+          const fits = !!origin && accepted.includes(origin)
           if (!fits) {
             const what = child.tag === 'instance' && child.attrs.component ? `an instance of '${child.attrs.component}'` : `a <${child.tag}>`
             violation('SLOT_ACCEPT', `slot '${name}' of component '${id}' accepts only instances of ${accept}, but was given ${what}`, path)
@@ -1106,4 +1112,43 @@ function checkIdentity(root: El, report: Report) {
     const hasSourceId = (el: El): boolean => el.attrs['source-id'] !== undefined || el.children.some(hasSourceId)
     if (hasSourceId(root)) report('SOURCE_ID_NO_SOURCE', 'the document has source-id values but no source on <gui> to read them against', 'gui')
   }
+}
+
+// ---------------------------------------------------------------------------
+// detached-from (RFC-0035)
+// ---------------------------------------------------------------------------
+
+/**
+ * `detached-from` names a component or variant declared in the document (the
+ * library is inlined before validation), and sits only on layout containers.
+ * `component` belongs to `<instance>` alone.
+ */
+function checkDetached(root: El, report: Report) {
+  const declared = new Set<string>()
+  const componentsEl = root.children.find((c) => c.tag === 'components')
+  if (componentsEl) {
+    for (const comp of componentsEl.children) {
+      if (comp.tag === 'component' && comp.attrs.id) declared.add(comp.attrs.id)
+      if (comp.tag === 'component-set') {
+        for (const v of comp.children) if (v.tag === 'variant' && v.attrs.id) declared.add(v.attrs.id)
+      }
+    }
+  }
+  function visit(el: El, path: string) {
+    const origin = el.attrs['detached-from']
+    if (origin !== undefined) {
+      if (!LAYOUT_TAGS.has(el.tag)) {
+        report('DETACHED_FROM_MISPLACED', `<${el.tag}> cannot carry detached-from; only a layout container (${[...LAYOUT_TAGS].join(', ')}) can${el.tag === 'instance' ? ' — an instance names its component with component' : ''}`, path)
+      } else if (!declared.has(origin)) {
+        report('UNRESOLVED_DETACHED_FROM', `detached-from="${origin}" names no component or variant declared in the document or its library`, path)
+      }
+    }
+    if (el.attrs.component !== undefined && el.tag !== 'instance' && el.tag !== 'prop') {
+      report('COMPONENT_ON_NON_INSTANCE', `<${el.tag} component="${el.attrs.component}">: component is only valid on <instance>; a detached container uses detached-from`, path)
+    }
+    el.children.forEach((child, i) => visit(child, `${path} > ${child.tag}[${i}]`))
+  }
+  root.children.forEach((child, i) => {
+    if (child.tag !== 'tokens') visit(child, `gui > ${child.tag}[${i}]`)
+  })
 }

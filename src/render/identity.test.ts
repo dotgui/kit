@@ -64,3 +64,14 @@ describe('prop targets through instances (RFC-0046)', () => {
     expect(html).toContain('>Tab<')
   })
 })
+
+describe('detached-from in the HTML renderer (RFC-0035)', () => {
+  test('it changes nothing on screen', () => {
+    const doc = (attr: string) => `<gui version="0.3.8">
+  <components><component id="comp-heading"><col><text value="Heading" /></col></component></components>
+  <col w="400"><col ${attr} fill="#B9FF66" radius="7"><text value="Search engine" /></col></col>
+</gui>`
+    const strip = (html: string) => html.replace(/\s*data-[a-z-]+="[^"]*"/g, '').replace(/\s*detached-from="[^"]*"/g, '')
+    expect(strip(renderToHTML(doc('detached-from="comp-heading"')))).toBe(strip(renderToHTML(doc(''))))
+  })
+})
