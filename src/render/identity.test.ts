@@ -118,3 +118,11 @@ describe('description and template in the HTML renderer (RFC-0057)', () => {
     expect(described).toBe(plain)
   })
 })
+
+describe('linked libraries in the HTML renderer (RFC-0056)', () => {
+  test('a block draws exactly as its declarations written directly', () => {
+    const direct = renderToHTML('<gui version="0.4.4"><tokens><color name="primary" value="#3B5BFD" /></tokens><col w="40" h="40" fill="$primary" /></gui>')
+    const linked = renderToHTML('<gui version="0.4.4"><library name="acme" uid="u" release="1" src="nowhere.gui"><tokens><color name="primary" value="#3B5BFD" /></tokens></library><col w="40" h="40" fill="$primary" /></gui>')
+    expect(linked).toBe(direct)
+  })
+})

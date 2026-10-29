@@ -137,7 +137,9 @@ export function flattenWith(libraryXml: string, documentXml: string): string {
 
   for (const block of library.declarations) {
     const inner = libraryXml.slice(block.innerStart, block.innerEnd)
-    const target = doc.declarations.find((d) => d.tag === block.tag)
+    // A <library> block is never merged into another: each records one
+    // library's provenance (RFC-0056).
+    const target = block.tag === 'library' ? undefined : doc.declarations.find((d) => d.tag === block.tag)
     if (!target) {
       prepend.push(libraryXml.slice(block.start, block.end))
     } else if (target.selfClosing) {
@@ -159,7 +161,9 @@ export function flattenWith(libraryXml: string, documentXml: string): string {
 function declaredNames(xml: string): { kind: string; name: string }[] {
   const root = parseTree(xml)
   const names: { kind: string; name: string }[] = []
-  for (const block of root.children) {
+  // A <library> block's declarations are the document's (RFC-0056).
+  const blocks = root.children.flatMap((c) => (c.tag === 'library' ? c.children : [c]))
+  for (const block of blocks) {
     if (LAYOUT_TAGS.has(block.tag)) break
     for (const child of block.children) {
       if (block.tag === 'tokens' && child.attrs.name) names.push({ kind: 'token', name: '$' + child.attrs.name })
@@ -171,15 +175,26 @@ function declaredNames(xml: string): { kind: string; name: string }[] {
   return names
 }
 
-/** Every name a library file shares, mode axes included, as `kind name` pairs. */
+/** Every name a library file shares, as `kind name` pairs. */
 function sharedNames(xml: string): { kind: string; name: string }[] {
-  const names = declaredNames(xml)
-  for (const block of parseTree(xml).children) {
+  return declaredNames(xml)
+}
+
+/**
+ * The mode axes a library file declares, with a signature: an identical axis —
+ * same name, values and default — is one axis, not a collision (RFC-0056).
+ */
+function sharedAxes(xml: string): { name: string; sig: string }[] {
+  const axes: { name: string; sig: string }[] = []
+  const root = parseTree(xml)
+  const blocks = root.children.flatMap((c) => (c.tag === 'library' ? c.children : [c]))
+  for (const block of blocks) {
     if (LAYOUT_TAGS.has(block.tag)) break
-    if (block.tag === 'mode' && block.attrs.name) names.push({ kind: 'mode', name: block.attrs.name })
-    if (block.tag === 'modes') for (const m of block.children) if (m.attrs.name) names.push({ kind: 'mode', name: m.attrs.name })
+    const add = (m: El) => { if (m.attrs.name) axes.push({ name: m.attrs.name, sig: `${(m.attrs.values || '').trim().split(/\s+/).join(' ')}|${m.attrs.default || ''}` }) }
+    if (block.tag === 'mode') add(block)
+    if (block.tag === 'modes') for (const m of block.children) if (m.tag === 'mode') add(m)
   }
-  return names
+  return axes
 }
 
 /** The directory a split library lives in (RFC-0055). */
@@ -219,6 +234,26 @@ export function libraryErrors(files: Record<string, string>, documents: Record<s
         errors.push({ code: 'LIBRARY_COLLISION', message: `${kind} '${name}' is declared by ${first} and ${path}`, path: 'package' })
       } else owner.set(key, path)
     }
+  }
+  // Mode axes: identical declarations are one axis (RFC-0056).
+  const axisOwner = new Map<string, { sig: string; path: string }>()
+  // A library has one identity: one library file declares uid (RFC-0056).
+  const withUid: string[] = []
+  for (const path of Object.keys(files).sort()) {
+    let axes: { name: string; sig: string }[]
+    try {
+      axes = sharedAxes(files[path])
+      if (parseTree(files[path]).attrs.uid !== undefined) withUid.push(path)
+    } catch { continue }
+    for (const { name, sig } of axes) {
+      const first = axisOwner.get(name)
+      if (first && first.sig !== sig) {
+        errors.push({ code: 'LIBRARY_COLLISION', message: `mode '${name}' is declared differently by ${first.path} and ${path}`, path: 'package' })
+      } else if (!first) axisOwner.set(name, { sig, path })
+    }
+  }
+  if (withUid.length > 1) {
+    errors.push({ code: 'LIBRARY_UID_TWICE', message: `uid is declared by ${withUid.join(' and ')}; exactly one library file declares the library's identity`, path: 'package' })
   }
   const all = { ...documents, ...files }
   for (const name of Object.keys(all).sort()) {

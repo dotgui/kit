@@ -23,7 +23,7 @@
  * the caller's concern, not the kit's.
  */
 import { unzipSync, zipSync, strToU8, strFromU8 } from 'fflate'
-import { validate, type ValidationError, type ValidationResult } from '../schema/validate'
+import { parseTree, validate, type ValidationError, type ValidationResult } from '../schema/validate'
 import { LIBRARY_DIRECTORY, LIBRARY_NAME, checkComponentIdsAcross, flattenWith, joinLibraryFiles, libraryErrors, validateInPackage } from './library'
 
 export { LIBRARY_DIRECTORY, LIBRARY_NAME } from './library'
@@ -82,12 +82,25 @@ export interface GuiInfo {
   libraryFiles: string[]
   /** Documents marked `<gui template>`: starting points to copy (RFC-0057). */
   templates: string[]
+  /** The `<library>` blocks in the package, by the file that holds them (RFC-0056). */
+  linkedLibraries: LinkedLibrary[]
   /** Asset package paths. */
   assets: string[]
   /** Whether a preview.webp is present. */
   hasPreview: boolean
   /** Entries that were read but are not part of the package (RFC-0054). */
   ignored: string[]
+}
+
+/** One `<library>` block: where some of the package's declarations came from (RFC-0056). */
+export interface LinkedLibrary {
+  name: string
+  uid: string
+  release: string
+  src?: string
+  source?: string
+  /** The file holding the block. */
+  in: string
 }
 
 /**
@@ -256,6 +269,24 @@ export function getLibrary(pkg: GuiPackage): string | undefined {
   return pkg.library ?? (pkg.libraryFiles ? joinLibraryFiles(pkg.libraryFiles) : undefined)
 }
 
+/** Every `<library>` block in the package's files, in file order (RFC-0056). */
+function linkedLibraries(pkg: GuiPackage): LinkedLibrary[] {
+  const files: [string, string][] = listDocuments(pkg).map((d) => [d, getDocument(pkg, d) ?? ''])
+  if (pkg.library !== undefined) files.push([LIBRARY_NAME, pkg.library])
+  for (const path of listLibraryFiles(pkg)) files.push([path, pkg.libraryFiles![path]])
+  const out: LinkedLibrary[] = []
+  for (const [name, xml] of files) {
+    let root
+    try { root = parseTree(xml) } catch { continue }
+    for (const block of root.children) {
+      if (block.tag !== 'library') continue
+      const a = block.attrs
+      out.push({ name: a.name ?? '', uid: a.uid ?? '', release: a.release ?? '', ...(a.src ? { src: a.src } : {}), ...(a.source ? { source: a.source } : {}), in: name })
+    }
+  }
+  return out
+}
+
 /** Whether a document's root says `template` (RFC-0057). */
 function isTemplate(xml: string | undefined): boolean {
   const open = xml ? xml.match(/<gui\b[^>]*>/i) : null
@@ -352,6 +383,7 @@ export function info(pkg: GuiPackage): GuiInfo {
     hasLibrary: getLibrary(pkg) !== undefined,
     libraryFiles: listLibraryFiles(pkg),
     templates: listDocuments(pkg).filter((d) => isTemplate(getDocument(pkg, d))),
+    linkedLibraries: linkedLibraries(pkg),
     assets: listAssets(pkg),
     hasPreview: pkg.preview !== undefined,
     ignored: pkg.ignored || [],

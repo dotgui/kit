@@ -1,3 +1,4 @@
+import { unwrapLibraryXml } from '../schema/validate'
 import { unzipSync } from 'fflate'
 import { DOMParser as XmlDOMParser } from '@xmldom/xmldom'
 
@@ -893,7 +894,8 @@ export function parse(bytes: Uint8Array): ParsedGUI | null {
 export function parseXml(xml: string, assetMap?: Record<string, string>): ParsedGUI | null {
   let doc: Document
   try {
-    const sanitized = normalizeBooleanAttrs(xml).replace(/&(?!amp;|lt;|gt;|quot;|apos;|#)/g, '&amp;')
+    // A <library> block's declarations are read as the document's (RFC-0056).
+    const sanitized = normalizeBooleanAttrs(unwrapLibraryXml(xml)).replace(/&(?!amp;|lt;|gt;|quot;|apos;|#)/g, '&amp;')
     // Prefer the platform's native DOMParser (browser / Figma UI) — fast and
     // exact. Fall back to @xmldom/xmldom (pure JS) wherever there's no DOM (node,
     // edge, the Figma sandbox), so the parser runs everywhere.

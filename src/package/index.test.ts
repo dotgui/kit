@@ -288,13 +288,16 @@ describe('the library directory (RFC-0055)', () => {
     expect(lone.ignored).toEqual(['library/README.md'])
   })
 
-  test('a name in two library files is an error naming both, mode axes included', () => {
+  test('a name in two library files is an error naming both; a mode axis only when it differs', () => {
     const dup = read({ ...files, 'library/brand.guix': `<gui version="${v}"><tokens><color name="primary" value="#FF0000" /></tokens></gui>` })
     const err = validateDocument(dup).errors.find((e) => e.code === 'LIBRARY_COLLISION')
     expect(err?.message).toContain('library/brand.guix')
     expect(err?.message).toContain('library/tokens.guix')
-    const modes = read({ ...files, 'library/a.guix': `<gui version="${v}"><mode name="theme" values="light dark" /></gui>`, 'library/b.guix': `<gui version="${v}"><mode name="theme" values="light dark" /></gui>` })
-    expect(codes(validateDocument(modes))).toContain('LIBRARY_COLLISION')
+    // An identical axis is one axis (RFC-0056); a different one collides.
+    const same = read({ ...files, 'library/a.guix': `<gui version="${v}"><mode name="theme" values="light dark" /></gui>`, 'library/b.guix': `<gui version="${v}"><mode name="theme" values="light dark" /></gui>` })
+    expect(codes(validateDocument(same))).not.toContain('LIBRARY_COLLISION')
+    const differ = read({ ...files, 'library/a.guix': `<gui version="${v}"><mode name="theme" values="light dark" /></gui>`, 'library/b.guix': `<gui version="${v}"><mode name="theme" values="light dark dim" /></gui>` })
+    expect(codes(validateDocument(differ))).toContain('LIBRARY_COLLISION')
   })
 
   test('every file declares 0.4.2 or higher', () => {
@@ -318,5 +321,28 @@ describe('templates in a package (RFC-0057)', () => {
     }))
     expect(info(pkg).templates).toEqual(['02-settings.guix'])
     expect(validateDocument(pkg).errors.map((e) => e.code)).toContain('TEMPLATE_IN_LIBRARY')
+  })
+})
+
+describe('linked libraries in a package (RFC-0056)', () => {
+  const lib = '<library name="acme-ds" uid="7f3e" release="1.4.0" src="../acme-ds.gui"><tokens><color name="primary" value="#3B5BFD" /></tokens></library>'
+  test('info lists linked libraries; flatten keeps each block its own', () => {
+    const pkg = unpack(zip({
+      '01.guix': '<gui version="0.4.4"><library name="base" uid="b" release="2"><tokens><color name="ink" value="#111111" /></tokens></library><col w="390" fill="$primary" /></gui>',
+      'library.guix': `<gui version="0.4.4">${lib}</gui>`,
+    }))
+    expect(info(pkg).linkedLibraries.map((l) => `${l.name}@${l.release} in ${l.in}`)).toEqual(['base@2 in 01.guix', 'acme-ds@1.4.0 in library.guix'])
+    expect(validateDocument(pkg).errors).toEqual([])
+    const flat = flatten(pkg)
+    expect(flat.match(/<library\b/g)).toHaveLength(2)
+  })
+
+  test('in a split library, one file declares uid', () => {
+    const pkg = unpack(zip({
+      '01.guix': '<gui version="0.4.4"><col w="390" /></gui>',
+      'library/a.guix': '<gui version="0.4.4" uid="u" release="1"><tokens /></gui>',
+      'library/b.guix': '<gui version="0.4.4" uid="u" release="1"><styles /></gui>',
+    }))
+    expect(validateDocument(pkg).errors.map((e) => e.code)).toContain('LIBRARY_UID_TWICE')
   })
 })
