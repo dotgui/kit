@@ -50,11 +50,11 @@
     "url": "https://github.com/dotgui/kit"
   },
   "dependencies": {
+    "@dotgui/render": "^0.4.0",
     "@panzoom/panzoom": "^4.6.2",
     "@xmldom/xmldom": "^0.9.10",
     "fflate": "^0.8.3",
-    "happy-dom": "^20.10.3",
-    "puppeteer-core": "^25.1.0"
+    "happy-dom": "^20.10.3"
   },
   "optionalDependencies": {
     "gui-optimizer": "*"
