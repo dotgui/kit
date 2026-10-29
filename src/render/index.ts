@@ -1,3 +1,4 @@
+import { unwrapLibraryXml } from '../schema/validate'
 import Panzoom, { type PanzoomObject } from '@panzoom/panzoom'
 import {
   parseXml,
@@ -3074,7 +3075,8 @@ export function render(
   // Still parse DOM for node walking — render functions operate on Elements
   let doc: Document
   try {
-    const sanitized = normalizeBooleanAttrs(code).replace(/&(?!amp;|lt;|gt;|quot;|apos;|#)/g, '&amp;')
+    // A <library> block's declarations are read as the document's (RFC-0056).
+    const sanitized = normalizeBooleanAttrs(unwrapLibraryXml(code)).replace(/&(?!amp;|lt;|gt;|quot;|apos;|#)/g, '&amp;')
     doc = new DOMParser().parseFromString(sanitized, 'text/xml')
     if (doc.querySelector('parsererror')) throw new Error()
   } catch {

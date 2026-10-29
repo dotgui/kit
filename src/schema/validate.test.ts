@@ -499,3 +499,33 @@ describe('descriptions (RFC-0057)', () => {
     expect(validate('<gui version="0.4.3" name="Settings — template" template><col w="10" /></gui>').errors).toEqual([])
   })
 })
+
+describe('linked libraries (RFC-0056)', () => {
+  const codes = (r: ReturnType<typeof validate>) => r.errors.map((e) => e.code)
+  const warns = (r: ReturnType<typeof validate>) => r.warnings.map((w) => w.code)
+  const block = (inner: string, attrs = 'name="acme-ds" uid="7f3e" release="1.4.0" source="figma"') => `<library ${attrs}>${inner}</library>`
+  const doc = (blocks: string, v = '0.4.4', own = '') => `<gui version="${v}">${own}${blocks}<col w="390" fill="$primary"><instance component="comp-button" /></col></gui>`
+  const acme = block('<tokens><color name="primary" value="#3B5BFD" /></tokens><components><component id="comp-button" source-id="a2b9"><row fill="$primary" /></component></components>')
+
+  test('a block resolves exactly as declarations written directly', () => {
+    expect(validate(doc(acme)).errors).toEqual([])
+  })
+
+  test('the block rules', () => {
+    expect(codes(validate(doc(acme, '0.4.3')))).toContain('LIBRARY_BLOCK_VERSION')
+    expect(codes(validate(doc(block('<tokens />', 'name="x" release="1"'))))).toContain('LIBRARY_BLOCK_ATTR')
+    expect(codes(validate(doc(acme + block('<col w="1" />', 'name="x" uid="u" release="1"'))))).toContain('LIBRARY_BLOCK_CONTENT')
+    expect(codes(validate(doc(acme + block(block('<tokens />', 'name="y" uid="v" release="1"'), 'name="x" uid="u" release="1"'))))).toContain('LIBRARY_BLOCK_NESTED')
+    expect(codes(validate(doc(block('<components><component id="comp-button" source-id="a2b9"><row /></component></components><tokens><color name="primary" value="#000000" /></tokens>', 'name="x" uid="u" release="1"'))))).toContain('SOURCE_ID_NO_SOURCE')
+    expect(warns(validate(doc(block('<tokens><color name="primary" value="#3B5BFD" /></tokens><components><component id="comp-button"><row /></component></components>', 'name="x" uid="u" release="1" src="https://www.figma.com/file/abc"'))))).toContain('LIBRARY_SRC_SOURCE_TOOL')
+  })
+
+  test('names stay unique; identical mode axes are one axis', () => {
+    expect(codes(validate(doc(acme, '0.4.4', '<tokens><color name="primary" value="#000000" /></tokens>')))).toContain('LIBRARY_BLOCK_REDECLARED')
+    const theme = '<mode name="theme" values="light dark" default="light" />'
+    const b2 = block(theme, 'name="base" uid="b" release="1"')
+    expect(validate(doc(acme.replace('<tokens>', theme + '<tokens>') + b2)).errors).toEqual([])
+    const other = block('<mode name="theme" values="light dark dim" default="light" />', 'name="base" uid="b" release="1"')
+    expect(codes(validate(doc(acme.replace('<tokens>', theme + '<tokens>') + other)))).toContain('LIBRARY_BLOCK_REDECLARED')
+  })
+})

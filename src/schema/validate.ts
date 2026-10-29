@@ -1,6 +1,6 @@
 /**
  * dotgui-core — Validator
- * Reads documents up to spec 0.4.3 (see SUPPORTED_VERSION).
+ * Reads documents up to spec 0.4.4 (see SUPPORTED_VERSION).
  *
  * Validates a .guix markup string against the dotgui spec.
  * Goes beyond structural checks — resolves token refs, asset refs,
@@ -33,6 +33,17 @@ export interface El {
   tag: string
   attrs: Record<string, string>
   children: El[]
+  /** Set on a declaration that came out of a `<library>` block: its name (RFC-0056). */
+  fromLibrary?: string
+}
+
+/**
+ * Removes the `<library>` wrappers from a document's markup, leaving their
+ * declaration blocks in place (RFC-0056). For readers that take every
+ * declaration block as they find it — the parser, the HTML renderer.
+ */
+export function unwrapLibraryXml(xml: string): string {
+  return xml.replace(/<library\b[^>]*?\/>/g, '').replace(/<library\b[^>]*>/g, '').replace(/<\/library\s*>/g, '')
 }
 
 /** Parse markup into the validator's bare element tree. Throws on bad XML. */
@@ -288,14 +299,14 @@ function isNumeric(value: string): boolean {
 
 /**
  * The newest spec point this kit implements in full (spec 0.4.2: the whole
- * 0.3 chapter, folder-form packages, the library directory, and
- * descriptions). Support is
+ * 0.3 chapter and the 0.4 Libraries chapter: folder-form packages, the
+ * library directory, descriptions, and linked libraries). Support is
  * cumulative; a document declaring a later point is refused rather than
  * checked against rules this kit does not know. The kit's own version shares
  * the spec's chapter and counts its own patch.
  */
-export const SUPPORTED_VERSION = '0.4.3'
-const SUPPORTED: [number, number, number] = [0, 4, 3]
+export const SUPPORTED_VERSION = '0.4.4'
+const SUPPORTED: [number, number, number] = [0, 4, 4]
 
 /** RFC-0036's recommended platform values. Others are allowed, and warned on. */
 export const RECOMMENDED_PLATFORMS = new Set(['ios', 'android', 'web', 'desktop', 'tv', 'watch'])
@@ -364,6 +375,12 @@ export function validate(guiXml: string, options: ValidateOptions = {}): Validat
   }
 
   const version = root.attrs.version || null
+
+  // Linked libraries (RFC-0056): the blocks are checked as written, then
+  // unwrapped so every later check reads their declarations as the document's.
+  const declaredVersion = parseVersion(version || '')
+  checkLibraryBlocks(root, declaredVersion, err, warn)
+  root = unwrapLibraryBlocks(root)
 
   // Rules that arrived in 0.3 are errors in a document declaring 0.3 or higher
   // and warnings in one written before them.
@@ -1158,7 +1175,8 @@ function checkIdentity(root: El, report: Report) {
   }
 
   if (root.attrs.source === undefined) {
-    const hasSourceId = (el: El): boolean => el.attrs['source-id'] !== undefined || el.children.some(hasSourceId)
+    // A library block's source-ids read against the block's own source.
+    const hasSourceId = (el: El): boolean => !el.fromLibrary && (el.attrs['source-id'] !== undefined || el.children.some(hasSourceId))
     if (hasSourceId(root)) report('SOURCE_ID_NO_SOURCE', 'the document has source-id values but no source on <gui> to read them against', 'gui')
   }
 }
@@ -1357,4 +1375,115 @@ function checkDescriptions(root: El, report: Report, advise: Report) {
   }
   if (root.attrs.description !== undefined) report('DESCRIPTION_MISPLACED', '<gui> cannot carry description; a document is described by its name', 'gui')
   root.children.forEach((child, i) => visit(child, `gui > ${child.tag}[${i}]`))
+}
+
+// ---------------------------------------------------------------------------
+// Linked libraries (RFC-0056)
+// ---------------------------------------------------------------------------
+
+/** What a `<library>` block may hold: declaration blocks only. */
+const LIBRARY_BLOCK_CHILDREN = new Set(['mode', 'modes', 'tokens', 'styles', 'fonts', 'components'])
+
+/** Hosts of source tools, which a `src` must never point at. */
+const SOURCE_TOOL_HOSTS = /^https?:\/\/([a-z0-9-]+\.)*(figma\.com|penpot\.app|sketch\.com|framer\.com)\//i
+
+/** A mode axis as a comparable signature: identical axes are one axis. */
+function axisSignature(m: El): string {
+  return `${(m.attrs.values || '').trim().split(/\s+/).join(' ')}|${m.attrs.default || ''}`
+}
+
+/** Every name a set of declaration blocks introduces, as `kind name`. */
+function blockNames(blocks: El[]): string[] {
+  const names: string[] = []
+  for (const block of blocks) {
+    for (const child of block.children) {
+      if (block.tag === 'tokens' && child.attrs.name) names.push(`token '$${child.attrs.name}'`)
+      else if (block.tag === 'fonts' && child.attrs.family) names.push(`font '${child.attrs.family}'`)
+      else if (block.tag === 'styles' && child.attrs.name) names.push(`${child.tag.replace('-', ' ')} '${child.attrs.name}'`)
+      else if (block.tag === 'components' && child.attrs.id) names.push(`component '${child.attrs.id}'`)
+    }
+  }
+  return names
+}
+
+/** The mode axes a set of declaration blocks declares, by name. */
+function blockAxes(blocks: El[]): El[] {
+  const axes: El[] = []
+  for (const block of blocks) {
+    if (block.tag === 'mode') axes.push(block)
+    else if (block.tag === 'modes') for (const m of block.children) if (m.tag === 'mode') axes.push(m)
+  }
+  return axes
+}
+
+/**
+ * The block rules: required attributes, declaration blocks only, no nesting,
+ * a source for any source-id inside, no source-tool src, 0.4.4 or higher —
+ * and names unique across the document and its blocks, with identical mode
+ * axes counted once.
+ */
+function checkLibraryBlocks(root: El, version: [number, number, number] | null, err: Report, warn: Report) {
+  const blocks = root.children.filter((c) => c.tag === 'library')
+  if (blocks.length === 0) return
+  if (!version || compareVersions(version, [0, 4, 4]) < 0) {
+    err('LIBRARY_BLOCK_VERSION', `a <library> block needs a document declaring 0.4.4 or higher, but this one declares ${root.attrs.version || '(none)'}`, 'gui')
+  }
+  const owner = new Map<string, string>()
+  const axes = new Map<string, { sig: string; where: string }>()
+  const claim = (blocksIn: El[], where: string) => {
+    for (const name of blockNames(blocksIn)) {
+      const first = owner.get(name)
+      if (first !== undefined) err('LIBRARY_BLOCK_REDECLARED', `${name} is declared by ${first} and by ${where}`, 'gui')
+      else owner.set(name, where)
+    }
+    for (const axis of blockAxes(blocksIn)) {
+      const known = axes.get(axis.attrs.name)
+      if (known && known.sig !== axisSignature(axis)) {
+        err('LIBRARY_BLOCK_REDECLARED', `mode '${axis.attrs.name}' is declared differently by ${known.where} and by ${where}`, 'gui')
+      } else if (!known) axes.set(axis.attrs.name, { sig: axisSignature(axis), where })
+    }
+  }
+  claim(root.children.filter((c) => c.tag !== 'library'), 'the document')
+  blocks.forEach((block, i) => {
+    const where = `<library name="${block.attrs.name ?? ''}">`
+    const at = `gui > library[${i}]`
+    for (const attr of ['name', 'uid', 'release']) {
+      if (!block.attrs[attr]) err('LIBRARY_BLOCK_ATTR', `<library> needs ${attr}`, at)
+    }
+    for (const child of block.children) {
+      if (child.tag === 'library') err('LIBRARY_BLOCK_NESTED', '<library> blocks do not nest; hoist the inner library to its own top-level block', at)
+      else if (!LIBRARY_BLOCK_CHILDREN.has(child.tag)) err('LIBRARY_BLOCK_CONTENT', `<library> holds declaration blocks only, not <${child.tag}>`, at)
+    }
+    if (block.attrs.source === undefined) {
+      const hasSourceId = (el: El): boolean => el.attrs['source-id'] !== undefined || el.children.some(hasSourceId)
+      if (block.children.some(hasSourceId)) err('SOURCE_ID_NO_SOURCE', `${where} has source-id values but no source to read them against`, at)
+    }
+    if (block.attrs.src && SOURCE_TOOL_HOSTS.test(block.attrs.src)) {
+      warn('LIBRARY_SRC_SOURCE_TOOL', `src="${block.attrs.src}" points at a source tool's file; src points at a .gui package`, at)
+    }
+    claim(block.children, where)
+  })
+}
+
+/**
+ * The document with each `<library>` block's declarations joined to its own:
+ * merged into the document's block of the same kind, or added before the
+ * layout root. Each moved declaration remembers the block it came from.
+ */
+function unwrapLibraryBlocks(root: El): El {
+  if (!root.children.some((c) => c.tag === 'library')) return root
+  const out: El[] = root.children.filter((c) => c.tag !== 'library').map((c) => ({ ...c, children: [...c.children] }))
+  const layoutAt = () => { const i = out.findIndex((c) => LAYOUT_TAGS.has(c.tag)); return i === -1 ? out.length : i }
+  const mark = (el: El, name: string): El => ({ ...el, fromLibrary: name, children: el.children.map((c) => mark(c, name)) })
+  for (const block of root.children.filter((c) => c.tag === 'library')) {
+    const name = block.attrs.name || 'library'
+    for (const child of block.children) {
+      if (!LIBRARY_BLOCK_CHILDREN.has(child.tag)) continue
+      if (child.tag === 'mode') { out.splice(layoutAt(), 0, mark(child, name)); continue }
+      const target = out.find((c) => c.tag === child.tag)
+      if (target) target.children.push(...child.children.map((c) => mark(c, name)))
+      else out.splice(layoutAt(), 0, { ...child, children: child.children.map((c) => mark(c, name)) })
+    }
+  }
+  return { ...root, children: out }
 }
