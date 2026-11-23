@@ -1,8 +1,10 @@
 # @dotgui/kit
 
-**The dotgui engine in one package.** Everything required to take a `.gui` file
-through its entire life — parse, validate, render, score — lives here, behind one
-version and one install.
+**The dotgui toolkit in one package.** Everything required to take a `.gui` file
+through its entire life — parse, validate, lint, score, pack — lives here, behind
+one version and one install. Drawing is the one renderer's job,
+[`@dotgui/render`](https://www.npmjs.com/package/@dotgui/render) (Rust); the kit
+makes images through it.
 
 ```bash
 bun add @dotgui/kit
@@ -39,7 +41,7 @@ flowchart TD
     V -->|"valid"| W["Write → .gui<br/><i>zip markup + assets</i>"]
     W --> Z(["📦 .gui package"])
 
-    V -.->|"optional"| R["Render · <code>/render</code><br/><i>see it · or make preview.webp</i>"]
+    V -.->|"optional"| R["Rasterize · <code>/rasterize</code><br/><i>see it · or make preview.webp</i>"]
     R -.->|"optional preview"| W
     Z -.->|"optional · advisory · consumer decides policy"| S["Score · <code>/score</code><br/><i>quality report — kit takes no action.<br/>A low score is still a valid file.</i>"]
 
@@ -49,7 +51,7 @@ flowchart TD
 
 **Only validate is required.** Everything else is à la carte — a tool that just
 needs to produce a `.gui` pulls `validate`, then writes valid markup (+ assets) to
-a zip. Render and score are capabilities you reach for *if you need them*, not
+a zip. Rasterize and score are capabilities you reach for *if you need them*, not
 gates you must pass through.
 
 1. **Validate** — *is this broken?* The one hard check. Illegal/unparseable markup
@@ -60,11 +62,9 @@ gates you must pass through.
    asset add/rm, set-preview — is the kit's `package` surface: deterministic file
    operations every tool reuses. It currently lives in the CLI and is the next
    consolidation target; see ARCHITECTURE.md.)*
-3. **Render** *(optional)* — *what does it look like?* The HTML render is the
-   format's reference output. Also feeds the `preview.webp`; the kit rasterizes
-   via `puppeteer-core` by default (opt into full `puppeteer` for a bundled
-   Chromium), falling back to a placeholder preview if no browser is found. See
-   [rasterize](src/rasterize/README.md).
+3. **Rasterize** *(optional)* — *what does it look like?* PNG, WebP or JPEG,
+   and the package's `preview.webp`, drawn by the Rust renderer compiled to
+   WebAssembly — no browser. See [rasterize](src/rasterize/README.md).
 
 **Score is not a mandatory step in packing.** Packing a valid file never requires
 a score. Score is a separate, read-only quality lens you can run on any valid file
@@ -85,13 +85,14 @@ own.
 ### Read path — consuming a file
 
 ```
-.gui bytes  →  parse  →  render
-               ─────     ──────
-               /parser   /render
+.gui bytes  →  parse          .gui bytes  →  @dotgui/render
+               ─────                         ──────────────
+               /parser                       pixels: Node, native, <gui-canvas>
 ```
 
-Parse resolves tokens, styles, and modes into a normalized model; render turns
-that model into HTML. That's the whole round trip.
+Parse resolves tokens, styles, and modes into a normalized model, for tools that
+read or transform a design. Showing one is `@dotgui/render`'s: in a page,
+`<gui-canvas>` (or `<gui-embed>` from `@dotgui/embed`); as a file, `/rasterize`.
 
 ---
 
@@ -99,7 +100,7 @@ that model into HTML. That's the whole round trip.
 
 The root exports only the canonical **types**. Behaviour lives in subpaths, so a
 consumer only bundles what it imports — import the parser and you don't pull in
-the renderer.
+the WASM renderer.
 
 Each module has its own README with the full API, examples, and use cases —
 linked below.
@@ -109,23 +110,23 @@ linked below.
 | `@dotgui/kit` | canonical types for the format | [types](src/schema/README.md) |
 | `@dotgui/kit/validate` | `validate(markup)` → schema errors, or clean | [validate](src/schema/README.md) |
 | `@dotgui/kit/parser` | `parseXml(markup)` → resolved model (tokens/styles/modes resolved) | [parser](src/parser/README.md) |
-| `@dotgui/kit/render` | `render(...)`, `renderToHTML(...)` → HTML (browser-clean) | [render](src/render/README.md) |
 | `@dotgui/kit/score` | `score(...)`, `scorePackage(...)` → CCAC report | [score](src/score/README.md) |
 | `@dotgui/kit/package` | `unpack`/`pack` + read/edit a `.gui` in memory | [package](src/package/README.md) |
 | `@dotgui/kit/lint` | `lintMarkup(...)` → idiom + content findings | [lint](src/lint/README.md) |
 | `@dotgui/kit/autofix` | `autofixMarkup(...)` → deterministic repair | [autofix](src/autofix/README.md) |
-| `@dotgui/kit/rasterize` | `rasterize`/`renderPreview` → image / `preview.webp` | [rasterize](src/rasterize/README.md) |
+| `@dotgui/kit/rasterize` | `rasterize`/`renderPreview` → image / `preview.webp`, via `@dotgui/render` | [rasterize](src/rasterize/README.md) |
 
 ### Examples
 
 ```ts
 import { validate } from '@dotgui/kit/validate'
-import { renderToHTML } from '@dotgui/kit/render'
+import { unpack } from '@dotgui/kit/package'
+import { rasterize } from '@dotgui/kit/rasterize'
 import { score } from '@dotgui/kit/score'
 
-const result = validate(markup)        // legal?
-const html   = renderToHTML(model)     // what does it look like?
-const report = score(markup)           // how good is it?
+const result    = validate(markup)                                // legal?
+const { image } = await rasterize(unpack(bytes), { format: 'png' })  // what does it look like?
+const report    = score(markup)                                   // how good is it?
 ```
 
 ---
@@ -142,12 +143,11 @@ const report = score(markup)           // how good is it?
   score(markup)                 // Clean reported NA — absent with a reason, never faked
   ```
 
-- **rasterizer** (`render` → `preview.webp`) — **shipped, with a default**. The
-  kit rasterizes via `puppeteer-core` (a *light* install — no bundled Chromium —
-  that drives a system browser). Opt into full `puppeteer` with
-  `DOTGUI_PUPPETEER=full` for a self-contained Chromium. No browser found →
-  placeholder `preview.webp` + a console error, never a hard failure. Full design
-  and limitations: [rasterize](src/rasterize/README.md).
+- **rasterizer** (→ PNG / WebP / JPEG, `preview.webp`) — **shipped**. Drawn by
+  `@dotgui/render`, the Rust renderer compiled to WebAssembly: no browser, same
+  pixels on every machine. A document the renderer refuses gets a placeholder
+  `preview.webp` and a console error, never a hard failure. Full design:
+  [rasterize](src/rasterize/README.md).
 
 The kit stays pure and light; heavy or
 volatile machinery is the consumer's choice.
@@ -165,7 +165,7 @@ entirely downstream and never knows, or cares, which one produced the file.
 flowchart LR
     AI(["🤖 AI agent<br/>(host + skill)"]) --> M["✍️ .gui markup"]
     H(["🧑 Human<br/>(CLI / app / editor)"]) --> M
-    M --> K["@dotgui/kit<br/><i>deterministic · no AI</i><br/>validate → render → pack"]
+    M --> K["@dotgui/kit<br/><i>deterministic · no AI</i><br/>validate → rasterize → pack"]
     K -.->|"advisory"| S["score · quality report"]
 ```
 
@@ -182,15 +182,13 @@ Everything that touches `.gui` files is a thin consumer of this one engine:
 
 | Consumer | Uses | Role |
 |---|---|---|
-| `@dotgui/cli` | parser · validate · render · score · package · lint · autofix · rasterize | command-line workflow; the AI-free deterministic toolchain |
-| `gui-app` | render · validate · package · lint · autofix | the standalone app — authoring + the preview grid |
-| `gui-figma` | parser · render | Figma plugin (import/round-trip) |
-| `gui-landing` | render | marketing site live previews |
-| `dotgui-vscode` | (planned) validate · render | editor diagnostics + preview |
-| `gui-tools` *(future)* | render → PNG/JPG/PDF/SVG | export platform; more output formats on the same engine |
+| `@dotgui/cli` | parser · validate · score · package · lint · autofix · rasterize | command-line workflow; the AI-free deterministic toolchain |
+| `@dotgui/embed` | package · parser | `<gui-embed>` on any page, drawn by `@dotgui/render`'s `<gui-canvas>` |
+| `gui-figma` | parser | Figma plugin (import/round-trip) |
+| `dotgui-vscode` | (planned) validate | editor diagnostics |
 
-Each one imports the kit and stops reimplementing the engine. A fix to the parser
-or renderer ships once, atomically, to all of them — no version cascade.
+Each one imports the kit and stops reimplementing the rules. A fix to the parser
+or validator ships once, atomically, to all of them — no version cascade.
 
 ---
 
@@ -199,12 +197,11 @@ or renderer ships once, atomically, to all of them — no version cascade.
 - **One package, one version.** The engine pieces are tightly coupled and move
   together. No internal version drift.
 - **Subpath exports + tree-shaking.** Use one slice, ship one slice.
-- **Sensible defaults, swappable.** The rasterizer ships a `puppeteer-core`
-  default (light install) you can upgrade to full `puppeteer` or override; the
-  optimizer (unstable) is injected. Defaults work out of the box; nothing heavy is
-  forced.
-- **HTML is the reference output.** Other formats are derived, and live outside
-  the kit.
+- **Sensible defaults.** The rasterizer works out of the box with no browser;
+  the optimizer (unstable) is injected.
+- **One renderer.** `@dotgui/render` (Rust) is the reference output, natively,
+  in Node and in the browser. The kit holds no renderer of its own (see core's
+  GOVERNANCE, *One renderer*).
 
 See [`../ARCHITECTURE.md`](../ARCHITECTURE.md) for the full consolidation decision
 and rationale.
