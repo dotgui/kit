@@ -7,7 +7,9 @@
  *
  * This is the single source of truth: the CLI, gui-app, and the skill linter all
  * consume it instead of keeping their own ports (build_gui.py / gui-app validator
- * are retired onto this). Keep in sync with references/spec.md.
+ * are retired onto this). Keep in sync with the spec (SUPPORTED_VERSION in
+ * ../schema/validate.ts): legality is validate's job, so lint never rejects
+ * markup the spec allows.
  */
 import { parseGui, walk, BOOLEAN_ATTRS, type El } from '../dom'
 
@@ -15,6 +17,14 @@ export interface LintIssue {
   level: 'error' | 'warn'
   where: string
   message: string
+}
+
+export interface LintOptions {
+  /**
+   * The package library's markup (library.guix, or library/ joined), when the
+   * document is one screen of a package: names it declares count as declared.
+   */
+  library?: string
 }
 
 export interface LintResult {
@@ -27,8 +37,8 @@ export interface LintResult {
 // ── Spec surface (mirror references/spec.md) ─────────────────────────────────
 const KNOWN_TAGS = new Set([
   'gui', 'mode', 'modes', 'tokens', 'color', 'number', 'string',
-  'styles', 'text-style', 'fonts', 'font',
-  'components', 'component', 'component-set', 'variant', 'props', 'prop', 'instance',
+  'styles', 'text-style', 'fill-style', 'effect-style', 'fonts', 'font', 'library',
+  'components', 'component', 'component-set', 'variant', 'props', 'prop', 'instance', 'slot',
   'frame', 'col', 'row', 'grid', 'stack', 'group',
   'text', 'segment', 'img', 'rect', 'ellipse', 'line',
   'appearance', 'fill', 'effect', 'border',
@@ -48,6 +58,10 @@ const CSS_COLOR_KEYWORDS = new Set([
   'orange', 'yellow', 'purple', 'pink', 'cyan', 'magenta', 'brown',
 ])
 const HEX_RE = /^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/
+// rgba() and oklch() are colors from spec 0.3.9 (RFC-0033); rgb() is tolerated, hex preferred.
+const RGBA_RE = /^rgba\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*(?:0|1|0?\.\d+|1\.0+)\s*\)$/i
+const OKLCH_RE = /^oklch\(\s*[\d.]+%?\s+[\d.]+\s+[\d.]+(?:deg)?\s*(?:\/\s*[\d.]+%?\s*)?\)$/i
+const RGB_RE = /^rgb\(/i
 const TOKEN_REF_RE = /\$[A-Za-z][A-Za-z0-9_-]*/g
 
 const INVENTED_ATTRS: Record<string, string> = {
@@ -109,7 +123,18 @@ function hasRange(el: El): boolean {
 }
 
 // ── Lint ─────────────────────────────────────────────────────────────────────
-export function lintMarkup(xml: string): LintResult {
+/** Token names a document declares: in its <tokens>, and in any <library> block's (RFC-0056). */
+function declaredTokens(root: El): Set<string> {
+  const names = new Set<string>()
+  const blocks = (Array.from(root.children) as El[]).flatMap((c) => c.tagName === 'library' ? Array.from(c.children) as El[] : [c])
+  for (const block of blocks) {
+    if (block.tagName !== 'tokens') continue
+    for (const t of Array.from(block.children) as El[]) if (t.getAttribute('name')) names.add(t.getAttribute('name'))
+  }
+  return names
+}
+
+export function lintMarkup(xml: string, options: LintOptions = {}): LintResult {
   const { root, error } = parseGui(xml)
   if (error || !root) {
     const issues: LintIssue[] = [{ level: 'error', where: '', message: error ?? 'parse failed' }]
@@ -119,9 +144,11 @@ export function lintMarkup(xml: string): LintResult {
   const issues: LintIssue[] = []
   const push = (level: 'error' | 'warn', message: string, where = '') => issues.push({ level, where, message })
 
-  const tokenNames = new Set<string>()
-  const tokens = (Array.from(root.children) as El[]).find((c) => c.tagName === 'tokens')
-  if (tokens) for (const t of Array.from(tokens.children) as El[]) if (t.getAttribute('name')) tokenNames.add(t.getAttribute('name'))
+  const tokenNames = declaredTokens(root)
+  if (options.library) {
+    const library = parseGui(options.library).root
+    if (library) for (const name of declaredTokens(library)) tokenNames.add(name)
+  }
 
   const nodes = walk(root)
   const parents = parentMap(root)
@@ -132,12 +159,13 @@ export function lintMarkup(xml: string): LintResult {
 
     // 1. Unknown tags.
     if (!KNOWN_TAGS.has(tag)) {
-      push('error', `unknown tag ${lbl} — not in the dotgui spec. See references/spec.md for the allowed tag set.`, tag)
+      push('error', `unknown tag ${lbl} — not in the dotgui spec.`, tag)
       continue
     }
 
-    // 2. Empty spacer nodes.
-    if (LAYOUT_CONTAINERS.has(tag) && !hasElementChildren(el)) {
+    // 2. Empty spacer nodes. A component's slot (slot="name") is a hole an
+    // instance fills, not a spacer (RFC-0044).
+    if (LAYOUT_CONTAINERS.has(tag) && !hasElementChildren(el) && !el.hasAttribute('slot')) {
       if (isVisibleBlock(el)) push('warn', `${lbl} is an empty filled box — use <rect> for a decorative block instead of an empty ${tag}.`, tag)
       else push('error', `${lbl} is an empty spacer node. Do NOT use empty col/row/frame to create space. Use gap=, padding (p/pt/pr/pb/pl), or gap="auto" on the parent instead.`, tag)
     }
@@ -154,11 +182,12 @@ export function lintMarkup(xml: string): LintResult {
       if (fillKids) push('error', `${lbl} has w="fill" children but no width of its own. A fill child needs a sized parent to fill into — give ${lbl} w="fill" (or a fixed w=), otherwise it hugs its content and overflows the canvas.`, tag)
     }
 
-    // 3c. A text prop can only override value=, never an <img> src.
-    if (tag === 'prop' && el.getAttribute('type') === 'text') {
+    // 3c. A string prop overrides value=, never an <img> src.
+    const propType = tag === 'prop' ? el.getAttribute('type') : null
+    if ((propType === 'string' || propType === 'text') && !el.hasAttribute('bind')) {
       const target = nodes.find((n) => n.getAttribute('id') === el.getAttribute('target'))
       if (target && target.tagName === 'img') {
-        push('error', `prop "${el.getAttribute('name') ?? '?'}" has type="text" but its target is an <img>. A text prop overrides value=, not an image src=, so every instance keeps the same picture. There is no image prop in v0.2 — author cards with differing images INLINE (not as instances of one component), or vary them via a fill/token.`, tag)
+        push('error', `prop "${el.getAttribute('name') ?? '?'}" has type="${propType}" but its target is an <img>. A string prop overrides value=, not src=, so every instance keeps the same picture. Use type="image" to swap the picture.`, tag)
       }
     }
 
@@ -176,8 +205,13 @@ export function lintMarkup(xml: string): LintResult {
       const hasSegments = (Array.from(el.children) as El[]).some((c) => c.tagName === 'segment')
       if (hasValue && hasSegments) push('error', `${lbl} has both value= and <segment> children. Use one.`, tag)
       if (!hasValue && !hasSegments) push('error', `${lbl} has neither value= nor <segment> children.`, tag)
-      if (!['color', 'fill', 'text-style'].some((a) => el.hasAttribute(a)) && !hasSegments) push('warn', `${lbl} has no color/fill/text-style — text should never inherit color in .gui.`, tag)
+      if (!['color', 'fill', 'fill-style', 'text-style'].some((a) => el.hasAttribute(a)) && !hasSegments) push('warn', `${lbl} has no fill — text never inherits a color in .gui.`, tag)
       if (el.hasAttribute('text-align')) push('error', `${lbl} uses text-align= — the renderer ignores it. The text alignment attribute is align="left|center|right".`, tag)
+    }
+
+    // 4b. color on text is obsolete from 0.3.10 (RFC-0022): text is colored with fill.
+    if ((tag === 'text' || tag === 'segment') && el.hasAttribute('color')) {
+      push('warn', `${lbl} uses color= — obsolete since 0.3.10. Text is colored with fill="…" like every other node.`, tag)
     }
 
     // 5. Legacy stroke.
@@ -215,8 +249,14 @@ export function lintMarkup(xml: string): LintResult {
       if (!val || val === 'none' || val.startsWith('$') || val.includes('gradient(')) continue
       if (val.startsWith('#')) {
         if (!HEX_RE.test(val)) push('error', `${lbl} ${attr}="${val}" is not a 6- or 8-digit hex.`, tag)
-      } else if (CSS_COLOR_KEYWORDS.has(val.toLowerCase()) || val.toLowerCase().startsWith('rgb')) {
-        push('error', `${lbl} ${attr}="${val}" uses a CSS color keyword/rgb(). Use hex (with alpha byte) or a $token.`, tag)
+      } else if (RGBA_RE.test(val) || OKLCH_RE.test(val)) {
+        continue
+      } else if (RGB_RE.test(val)) {
+        push('warn', `${lbl} ${attr}="${val}" uses rgb(), which is only tolerated in old exports. Write hex, or rgba() for a color with opacity.`, tag)
+      } else if (CSS_COLOR_KEYWORDS.has(val.toLowerCase())) {
+        push('error', `${lbl} ${attr}="${val}" is a CSS color keyword. Use hex, rgba(), oklch() or a $token.`, tag)
+      } else if (/^(rgba|oklch)\(/i.test(val)) {
+        push('error', `${lbl} ${attr}="${val}" is not a well-formed ${val.slice(0, val.indexOf('(')).toLowerCase()}() color.`, tag)
       }
     }
   }
@@ -228,12 +268,12 @@ export function lintMarkup(xml: string): LintResult {
     for (const m of value.match(TOKEN_REF_RE) ?? []) referenced.add(m.slice(1))
   }
   for (const name of [...referenced].filter((n) => !tokenNames.has(n)).sort()) {
-    push('error', `$${name} is referenced but not declared in <tokens>.`, 'tokens')
+    push('error', `$${name} is referenced but not declared in <tokens>${options.library === undefined ? '' : ' or the library'}.`, 'tokens')
   }
 
   // 9. No <assets> block.
   if ((Array.from(root.children) as El[]).some((c) => c.tagName === 'assets') || nodes.some((n) => n.tagName === 'assets')) {
-    push('error', 'Found an <assets> block — not valid in v0.2. Reference images inline with <img src="assets/..."> or a URL.', 'assets')
+    push('error', 'Found an <assets> block — not part of the format. Reference images inline with <img src="assets/..."> or a URL.', 'assets')
   }
 
   // 10. No <svg> tags.

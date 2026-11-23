@@ -1,7 +1,7 @@
 {
   "name": "@dotgui/kit",
-  "version": "0.4.0",
-  "description": "The dotgui engine in one package: parser, validator, HTML renderer, and CCAC quality scorer.",
+  "version": "0.4.1",
+  "description": "The dotgui toolkit: parser, validator, linter, CCAC scorer, packager \u2014 and images through the Rust renderer (@dotgui/render).",
   "license": "MIT",
   "type": "module",
   "main": "./src/index.ts",
@@ -11,10 +11,6 @@
     "./types": "./src/schema/types.ts",
     "./validate": "./src/schema/validate.ts",
     "./parser": "./src/parser/index.ts",
-    "./render": {
-      "types": "./src/render/index.ts",
-      "default": "./dist/render.js"
-    },
     "./score": "./src/score/index.ts",
     "./package": "./src/package/index.ts",
     "./lint": "./src/lint/index.ts",
@@ -26,24 +22,20 @@
   },
   "files": [
     "src/",
-    "dist/",
     "README.md"
   ],
   "scripts": {
     "gen:spec": "bun run scripts/gen-spec.ts",
     "gen:spec:check": "bun run scripts/gen-spec.ts && git -C ../core diff --exit-code spec/spec.json",
-    "typecheck": "tsc --noEmit",
-    "build": "bun run build:render",
-    "build:render": "bun build ./src/render/index.ts --outfile ./dist/render.js --format esm",
-    "prepublishOnly": "bun run build:render"
+    "typecheck": "tsc --noEmit"
   },
   "keywords": [
     "dotgui",
     "gui",
     "parser",
-    "render",
     "validate",
-    "score"
+    "score",
+    "rasterize"
   ],
   "repository": {
     "type": "git",
@@ -51,10 +43,8 @@
   },
   "dependencies": {
     "@dotgui/render": "^0.4.0",
-    "@panzoom/panzoom": "^4.6.2",
     "@xmldom/xmldom": "^0.9.10",
-    "fflate": "^0.8.3",
-    "happy-dom": "^20.10.3"
+    "fflate": "^0.8.3"
   },
   "optionalDependencies": {
     "gui-optimizer": "*"

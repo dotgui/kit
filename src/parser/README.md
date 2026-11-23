@@ -43,7 +43,7 @@ const values = flattenTokens(model.tokens, model.modes, { theme: 'dark' })
 
 ## Use cases
 
-- **Feed the renderer** — `parseXml` → model → `renderToHTML`.
+- **Read a design** — `parseXml` → model, for tools that inspect or transform it. Drawing is `@dotgui/render`'s job.
 - **Static analysis** — walk `ParsedNode` for linting, metrics, accessibility.
 - **Token/theme resolution** — compute concrete values for any active mode.
 - **Round-trip tooling** — Figma import/export reads the resolved model.
